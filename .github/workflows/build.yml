@@ -79,13 +79,13 @@ jobs:
         shell: cmd
         run: test.cmd
 
-      # The zip carries the font licences (OFL) next to the exe.
+      # The zip carries the GPL and font licences (OFL) next to the exe.
       - name: Package
         shell: pwsh
         run: |
           $dir = "build\NCS-Workbench-$env:VERSION"
           New-Item -ItemType Directory $dir | Out-Null
-          Copy-Item build\NCS-Workbench.exe, fonts\*-OFL.txt $dir
+          Copy-Item build\NCS-Workbench.exe, LICENSE, fonts\*-OFL.txt $dir
           Compress-Archive "$dir\*" "build\NCS-Workbench-$env:VERSION.zip"
 
       - uses: actions/upload-artifact@v4
