@@ -6,30 +6,30 @@
 
 #include <windows.h>
 
-// Greys
-const COLORREF kPage = RGB(0x00, 0x00, 0x00);
-const COLORREF kTile1 = RGB(0x11, 0x11, 0x11);
-const COLORREF kTile2 = RGB(0x16, 0x16, 0x16);
-const COLORREF kTile3 = RGB(0x0c, 0x0c, 0x0c);
-const COLORREF kPanel = RGB(0x08, 0x08, 0x08);
-const COLORREF kRule = RGB(0x26, 0x26, 0x26);
-const COLORREF kBorder = RGB(0x40, 0x40, 0x40);
-const COLORREF kNumber = RGB(0x2a, 0x2a, 0x2a);
-const COLORREF kWhite = RGB(0xff, 0xff, 0xff);
-const COLORREF kInvert = RGB(0xf2, 0xf2, 0xf2);
-const COLORREF kPressed = RGB(0xd4, 0xd4, 0xd4);
-const COLORREF kText = RGB(0xe5, 0xe5, 0xe5);
-const COLORREF kSecondary = RGB(0xa3, 0xa3, 0xa3);
-const COLORREF kMuted = RGB(0x8a, 0x8a, 0x8a);
-const COLORREF kFaint = RGB(0x73, 0x73, 0x73);
-const COLORREF kDisabled = RGB(0x52, 0x52, 0x52);
+// Colour schemes, named after BMW interior colours. Dakota Black is the
+// Mosaic look and the default; the others are for readability: two dim
+// (not fully black) and two light. Setting "Theme" holds the name.
+enum ThemeId { THEME_DAKOTA_BLACK, THEME_ANTHRACITE, THEME_MOCHA, THEME_CANBERRA_BEIGE, THEME_SILVERSTONE, THEME_COUNT };
 
+const wchar_t* ThemeName(int theme);         // "Dakota Black"
+int ThemeFromName(const wchar_t* name);       // unknown names give Dakota Black
+// Sets the colours below. Windows already open need ApplyThemedFrame/Control
+// and a repaint; themed buttons follow on their own.
+void SetTheme(int theme);
+int CurrentTheme();
+bool IsLightTheme();
+
+// The palette of the current scheme. Names are from the dark design: in a
+// light scheme kPage is the lightest colour and kWhite the darkest text.
+// Greys
+extern COLORREF kPage, kTile1, kTile2, kTile3, kPanel, kRule, kBorder, kNumber;
+extern COLORREF kWhite, kInvert, kPressed;  // strongest text; primary button fill, pressed
+extern COLORREF kText, kSecondary, kMuted, kFaint, kDisabled;
 // Accents
-const COLORREF kAccent = RGB(0x4c, 0x8d, 0xff);  // keyboard focus
-const COLORREF kSelect = RGB(0x12, 0x2b, 0x52);  // selected list row
-const COLORREF kGood = RGB(0x3d, 0xd6, 0x8c);
-const COLORREF kWarn = RGB(0xff, 0xb2, 0x24);
-const COLORREF kBad = RGB(0xff, 0x6b, 0x6b);
+extern COLORREF kAccent;  // keyboard focus
+extern COLORREF kSelect;  // selected list row
+extern COLORREF kGood, kWarn, kBad;
+extern COLORREF kBadHot, kBadPressed;  // BUTTON_DANGER hover, pressed
 
 struct Fonts {
     HFONT label;    // Geist Mono 11, uppercase labels and meta
@@ -58,15 +58,19 @@ int S(int px);
 int Tracking();
 
 // `surface` is the colour behind the button, used for links and disabled states.
-HWND CreateThemedButton(HWND parent, int id, const wchar_t* text, ButtonKind kind, COLORREF surface);
+// It must be one of the palette variables above: the button keeps its address,
+// so it follows a theme change.
+HWND CreateThemedButton(HWND parent, int id, const wchar_t* text, ButtonKind kind, const COLORREF& surface);
 void DrawThemedButton(const DRAWITEMSTRUCT* dis);
 void SetThemedCheck(HWND button, bool checked);
 bool IsThemedChecked(HWND button);
 
-// Dark title bar on Windows 10 1809+ and 11; no effect on older systems.
-void ApplyDarkFrame(HWND hwnd);
-// Dark scrollbars/combo parts on Windows 10+ ("DarkMode_Explorer", "DarkMode_CFD").
-void ApplyDarkControl(HWND hwnd, const wchar_t* subApp);
+// Title bar in the scheme's colours: dark on Windows 10 1809+ and 11 for the
+// dark schemes, caption colours on Windows 11; no effect on older systems.
+void ApplyThemedFrame(HWND hwnd);
+// Dark scrollbars/combo parts on Windows 10+ ("DarkMode_Explorer", "DarkMode_CFD")
+// for the dark schemes; the normal theme for the light ones.
+void ApplyThemedControl(HWND hwnd, const wchar_t* darkSubApp);
 
 void Fill(HDC dc, const RECT& rc, COLORREF color);
 void Frame(HDC dc, const RECT& rc, COLORREF color, int width = 1);

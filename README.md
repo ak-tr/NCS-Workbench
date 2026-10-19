@@ -47,6 +47,7 @@ Outside a session, three manual tools do one job each:
 
 - [Guided coding sessions](docs/guides/guided-sessions.md): every step of a session with screenshots, what can go wrong at each one, the history window and what's saved.
 - [Main window and tools](docs/guides/main-window.md): the home screen, the WORK folder panel and the three manual tools.
+- [Themes](docs/guides/themes.md): the five colour schemes (dark, dim and light) and how to switch between them.
 
 ## Download
 

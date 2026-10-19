@@ -1,4 +1,4 @@
-// Dark modal popups (Backup TRC, Empty MAN).
+// Themed modal popups (Backup TRC, Empty MAN).
 
 #pragma once
 

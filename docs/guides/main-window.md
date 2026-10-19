@@ -13,7 +13,7 @@ The window has two columns:
 - **Left, the coding column.** The **START SESSION** tile starts a [guided session](guided-sessions.md). Below it, **TOOLS / OUTSIDE A SESSION** holds the three manual tools, each with a status line and a button. **RECENT SESSIONS** lists your last three sessions. **HISTORY** at the top right opens all of them.
 - **Right, the WORK folder.** Every file in `C:\NCSEXPER\WORK` with its size and time. The files Workbench works with (`FSW_PSW.TRC`, `FSW_PSW.MAN`, `NETTODAT.TRC`) are shown brighter. The list updates on its own when NCS Expert or NCS Dummy writes a file. **CHANGE** under the list picks another WORK folder.
 
-The footer shows the file count and whether the list updates automatically; the build's version is on the right.
+The footer shows the file count and whether the list updates automatically. On the right, **THEME** switches the [colour scheme](themes.md) and the build's version follows it.
 
 There's no backup folder yet, so the block at the bottom left says **Not set** and offers **CHOOSE**. You're also asked for a folder the first time a backup or session needs one.
 

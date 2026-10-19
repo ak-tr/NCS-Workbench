@@ -242,7 +242,7 @@ static void CreateDialogControls(CompareDialog* d)
     col.mask = LVCF_WIDTH;
     col.cx = S(600);
     ListView_InsertColumn(d->list, 0, &col);
-    ApplyDarkControl(d->list, L"DarkMode_Explorer");
+    ApplyThemedControl(d->list, L"DarkMode_Explorer");
 
     LayoutDialog(d);
     ApplyFilter(d);
