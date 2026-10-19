@@ -17,6 +17,7 @@ struct ButtonInfo {
     ButtonKind kind;
     COLORREF surface;
     bool hot;
+    bool checked;  // BUTTON_CHECK
 };
 
 int S(int px)
@@ -281,7 +282,8 @@ HWND CreateThemedButton(HWND parent, int id, const wchar_t* text, ButtonKind kin
     info->kind = kind;
     info->surface = surface;
     info->hot = false;
-    info->proc = (WNDPROC)GetWindowLongPtrW(h, GWLP_WNDPROC);
+    info->checked = false;
+    info->proc =(WNDPROC)GetWindowLongPtrW(h, GWLP_WNDPROC);
     SetWindowLongPtrW(h, GWLP_USERDATA, (LONG_PTR)info);
     SetWindowLongPtrW(h, GWLP_WNDPROC, (LONG_PTR)ButtonProc);
     SendMessageW(h, WM_SETFONT, (WPARAM)g_fonts.button, FALSE);
@@ -299,8 +301,32 @@ void DrawThemedButton(const DRAWITEMSTRUCT* dis)
     bool pressed = (dis->itemState & ODS_SELECTED) != 0;
     bool focused = (dis->itemState & ODS_FOCUS) && !(dis->itemState & ODS_NOFOCUSRECT);
     bool hot = info->hot && !disabled;
-    wchar_t text[64];
-    GetWindowTextW(dis->hwndItem, text, 64);
+    wchar_t text[160];
+    GetWindowTextW(dis->hwndItem, text, 160);
+
+    if (info->kind == BUTTON_CHECK) {
+        Fill(dc, rc, info->surface);
+        int box = S(14), cy = (rc.top + rc.bottom) / 2;
+        RECT b = { rc.left + S(2), cy - box / 2, rc.left + S(2) + box, cy - box / 2 + box };
+        if (info->checked && !disabled) {
+            Frame(dc, b, kInvert);
+            RECT dot = { b.left + S(4), b.top + S(4), b.right - S(4), b.bottom - S(4) };
+            Fill(dc, dot, kInvert);
+        } else {
+            Fill(dc, b, kPage);
+            Frame(dc, b, disabled ? kRule : hot ? kWhite : kMuted);
+            if (info->checked) {
+                RECT dot = { b.left + S(4), b.top + S(4), b.right - S(4), b.bottom - S(4) };
+                Fill(dc, dot, kDisabled);
+            }
+        }
+        RECT tr = { b.right + S(12), rc.top, rc.right - S(4), rc.bottom };
+        DrawLabel(dc, g_fonts.body, disabled ? kDisabled : hot || info->checked ? kWhite : kText, text, tr,
+                  DT_LEFT | DT_VCENTER);
+        if (focused)
+            Frame(dc, rc, kAccent);
+        return;
+    }
 
     if (info->kind == BUTTON_LINK) {
         Fill(dc, rc, info->surface);
@@ -347,6 +373,21 @@ void DrawThemedButton(const DRAWITEMSTRUCT* dis)
     DrawLabel(dc, g_fonts.button, fg, text, rc, DT_CENTER | DT_VCENTER, Tracking());
     if (focused)
         Frame(dc, rc, kAccent, S(2));
+}
+
+void SetThemedCheck(HWND button, bool checked)
+{
+    ButtonInfo* info = (ButtonInfo*)GetWindowLongPtrW(button, GWLP_USERDATA);
+    if (info && info->checked != checked) {
+        info->checked = checked;
+        InvalidateRect(button, NULL, FALSE);
+    }
+}
+
+bool IsThemedChecked(HWND button)
+{
+    ButtonInfo* info = (ButtonInfo*)GetWindowLongPtrW(button, GWLP_USERDATA);
+    return info && info->checked;
 }
 
 // ---------------------------------------------------------------------------

@@ -36,7 +36,9 @@ static const size_t kMaxRecentModules = 8;
 static const UINT WM_APP_REFRESH = WM_APP + 1;
 static const UINT WM_APP_CHASSIS = WM_APP + 2;
 
-enum { IDC_CHASSIS = 100, IDC_MODULE, IDC_CHANGE_FOLDER, IDC_DO_BACKUP };
+enum { IDC_CHASSIS = 100, IDC_MODULE, IDC_CHANGE_FOLDER, IDC_DO_BACKUP, IDC_VEHICLE, IDC_READ_AGAIN };
+
+static const int kMaxVehicleLength = 40;
 
 enum Detection { DETECT_NONE, DETECT_FOUND, DETECT_UNCLEAR, DETECT_NO_TRACE };
 
@@ -49,6 +51,13 @@ struct BackupDialog {
     WString error;
     bool done;
     bool succeeded;
+
+    // Session mode (RunEcuDialog): confirm the ECU instead of backing up.
+    bool ecuMode;
+    HWND vehicle;
+    WString label, info, stamp;  // header label, trace line, capture time for the name
+    EcuChoice* choice;
+    bool readAgain;
 
     // SP-Daten
     WString datenDir;                                    // "" if not installed
@@ -198,6 +207,7 @@ static void UpdateForChassis(BackupDialog* d)
 
 struct Rects {
     RECT chassis, module, change, cancel, ok;
+    RECT vehicleBox, vehicle, note;  // session mode
 };
 
 static Rects DialogRects(int w, int h)
@@ -210,7 +220,10 @@ static Rects DialogRects(int w, int h)
     r.change = { w - pad - S(80), S(234), w - pad, S(258) };
     int by = h - pad - S(44);
     r.ok = { w - pad - S(140), by, w - pad, by + S(44) };
-    r.cancel = { r.ok.left - S(8) - S(120), by, r.ok.left - S(8), by + S(44) };
+    r.cancel = { r.ok.left - S(8) - S(140), by, r.ok.left - S(8), by + S(44) };
+    r.vehicleBox = { pad, S(238), w - pad, S(270) };
+    r.vehicle = { pad + S(10), S(245), w - pad - S(10), S(264) };
+    r.note = { pad, S(284), w - pad, S(342) };
     return r;
 }
 
@@ -226,11 +239,96 @@ static bool ReadCodes(BackupDialog* d, WString* chassis, WString* module)
 
 static BackupDialog* g_painting;  // PaintBuffered takes a plain function
 
+static void PaintFieldInfo(HDC dc, BackupDialog* d, const Rects& rc)
+{
+    // Under the fields: where the chassis' data lives, and what the trace matched.
+    RECT ci = { rc.chassis.left, S(188), rc.chassis.right, S(204) };
+    RECT mi = { rc.module.left, S(188), rc.module.right, S(204) };
+    WString typedChassis = SanitizeCode(GetWindowTextString(d->chassis), false);
+    if (d->datenDir.empty()) {
+        DrawLabel(dc, g_fonts.label, kFaint, L"SP-DATEN NOT FOUND", ci, DT_LEFT | DT_VCENTER, Tracking());
+    } else if (!d->folder.empty()) {
+        WString where = L"DATEN\\" + d->folder;
+        DrawLabel(dc, g_fonts.label, kMuted, where.c_str(), ci, DT_LEFT | DT_VCENTER, Tracking());
+    } else if (!typedChassis.empty()) {
+        DrawLabel(dc, g_fonts.label, kWarn, L"NOT IN SP-DATEN", ci, DT_LEFT | DT_VCENTER, Tracking());
+    }
+    if (d->detection == DETECT_FOUND) {
+        // In a session it's only a suggestion: names can't prove which ECU wrote the trace.
+        wchar_t text[64];
+        wsprintfW(text, d->ecuMode ? L"SUGGESTED FROM TRACE (%d/%d)" : L"DETECTED FROM TRACE (%d/%d)",
+                  d->detectedHits, d->traceKnown);
+        DrawLabel(dc, g_fonts.label, d->ecuMode ? kAccent : kGood, text, mi, DT_LEFT | DT_VCENTER, Tracking());
+    } else if (d->detection == DETECT_UNCLEAR) {
+        DrawLabel(dc, g_fonts.label, kWarn, L"NO CLEAR MATCH, PICK ONE", mi, DT_LEFT | DT_VCENTER, Tracking());
+    } else if (d->detection == DETECT_NO_TRACE) {
+        DrawLabel(dc, g_fonts.label, kWarn, L"COULDN'T READ THE TRACE", mi, DT_LEFT | DT_VCENTER, Tracking());
+    }
+}
+
+static void PaintEcuDialog(HDC dc, BackupDialog* d, int w)
+{
+    int pad = S(24);
+    RECT r = { pad, S(24), w - pad, S(40) };
+    DrawLabel(dc, g_fonts.label, kFaint, d->label.c_str(), r, DT_LEFT | DT_VCENTER, Tracking());
+    r = { pad, S(44), w - pad, S(74) };
+    DrawLabel(dc, g_fonts.heading, kWhite, L"Which ECU was this?", r, DT_LEFT | DT_VCENTER);
+    r = { pad, S(78), w - pad, S(96) };
+    DrawLabel(dc, g_fonts.label, kMuted, d->info.c_str(), r, DT_LEFT | DT_VCENTER, Tracking());
+    RECT rule = { pad, S(110), w - pad, S(111) };
+    Fill(dc, rule, kRule);
+
+    RECT client;
+    GetClientRect(d->hwnd, &client);
+    Rects rc = DialogRects(client.right, client.bottom);
+    r = { rc.chassis.left, S(124), rc.chassis.right, S(140) };
+    DrawLabel(dc, g_fonts.label, kFaint, L"CHASSIS", r, DT_LEFT | DT_VCENTER, Tracking());
+    r = { rc.module.left, S(124), rc.module.right, S(140) };
+    DrawLabel(dc, g_fonts.label, kFaint, L"MODULE", r, DT_LEFT | DT_VCENTER, Tracking());
+    PaintFieldInfo(dc, d, rc);
+
+    r = { pad, S(216), w - pad, S(232) };
+    DrawLabel(dc, g_fonts.label, kFaint, L"VEHICLE / OPTIONAL", r, DT_LEFT | DT_VCENTER, Tracking());
+    Fill(dc, rc.vehicleBox, kTile1);
+    Frame(dc, rc.vehicleBox, GetFocus() == d->vehicle ? kAccent : kBorder);
+
+    DashedFrame(dc, rc.note, kBorder);
+    RECT nt = { rc.note.left + S(14), rc.note.top + S(10), rc.note.right - S(14), rc.note.bottom - S(8) };
+    DrawLabel(dc, g_fonts.body, kSecondary,
+              d->datenDir.empty()
+                  ? L"Without SP-Daten nothing is suggested. Enter the chassis and module you picked in NCS Expert; "
+                    L"NCS Dummy reads them from the copy's name."
+                  : L"The module is a suggestion: SP-Daten function names can't prove which ECU wrote the trace. "
+                    L"Check it against what you picked in NCS Expert.",
+              nt, DT_LEFT | DT_TOP | DT_WORDBREAK);
+
+    r = { pad, S(356), w - pad, S(372) };
+    DrawLabel(dc, g_fonts.label, kFaint, L"COPY FOR NCS DUMMY", r, DT_LEFT | DT_VCENTER, Tracking());
+    r = { pad, S(376), w - pad, S(398) };
+    WString c, m;
+    if (ReadCodes(d, &c, &m)) {
+        WString name = c + L"-" + m + L"-" + d->stamp + kBackupTail;
+        DrawLabel(dc, g_fonts.mono, kWhite, name.c_str(), r, DT_LEFT | DT_VCENTER);
+    } else {
+        DrawLabel(dc, g_fonts.label, kWarn, L"ENTER A CHASSIS AND A MODULE", r, DT_LEFT | DT_VCENTER, Tracking());
+    }
+    if (!d->error.empty()) {
+        r = { pad, S(408), w - pad, rc.cancel.top - S(20) };
+        DrawLabel(dc, g_fonts.body, kBad, d->error.c_str(), r, DT_LEFT | DT_TOP | DT_WORDBREAK);
+    }
+    rule = { pad, rc.cancel.top - S(16), w - pad, rc.cancel.top - S(15) };
+    Fill(dc, rule, kRule);
+}
+
 static void PaintDialog(HDC dc, const RECT& client)
 {
     BackupDialog* d = g_painting;
     int pad = S(24), w = client.right, h = client.bottom;
     Fill(dc, client, kPage);
+    if (d->ecuMode) {
+        PaintEcuDialog(dc, d, w);
+        return;
+    }
 
     RECT r = { pad, S(24), w - pad, S(40) };
     DrawLabel(dc, g_fonts.label, kFaint, L"01 / BACK UP", r, DT_LEFT | DT_VCENTER, Tracking());
@@ -247,28 +345,7 @@ static void PaintDialog(HDC dc, const RECT& client)
     DrawLabel(dc, g_fonts.label, kFaint, L"CHASSIS", r, DT_LEFT | DT_VCENTER, Tracking());
     r = { rc.module.left, S(124), rc.module.right, S(140) };
     DrawLabel(dc, g_fonts.label, kFaint, L"MODULE", r, DT_LEFT | DT_VCENTER, Tracking());
-
-    // Under the fields: where the chassis' data lives, and what the trace matched.
-    RECT ci = { rc.chassis.left, S(188), rc.chassis.right, S(204) };
-    RECT mi = { rc.module.left, S(188), rc.module.right, S(204) };
-    WString typedChassis = SanitizeCode(GetWindowTextString(d->chassis), false);
-    if (d->datenDir.empty()) {
-        DrawLabel(dc, g_fonts.label, kFaint, L"SP-DATEN NOT FOUND", ci, DT_LEFT | DT_VCENTER, Tracking());
-    } else if (!d->folder.empty()) {
-        WString where = L"DATEN\\" + d->folder;
-        DrawLabel(dc, g_fonts.label, kMuted, where.c_str(), ci, DT_LEFT | DT_VCENTER, Tracking());
-    } else if (!typedChassis.empty()) {
-        DrawLabel(dc, g_fonts.label, kWarn, L"NOT IN SP-DATEN", ci, DT_LEFT | DT_VCENTER, Tracking());
-    }
-    if (d->detection == DETECT_FOUND) {
-        wchar_t text[64];
-        wsprintfW(text, L"DETECTED FROM TRACE (%d/%d)", d->detectedHits, d->traceKnown);
-        DrawLabel(dc, g_fonts.label, kGood, text, mi, DT_LEFT | DT_VCENTER, Tracking());
-    } else if (d->detection == DETECT_UNCLEAR) {
-        DrawLabel(dc, g_fonts.label, kWarn, L"NO CLEAR MATCH, PICK ONE", mi, DT_LEFT | DT_VCENTER, Tracking());
-    } else if (d->detection == DETECT_NO_TRACE) {
-        DrawLabel(dc, g_fonts.label, kWarn, L"COULDN'T READ THE TRACE", mi, DT_LEFT | DT_VCENTER, Tracking());
-    }
+    PaintFieldInfo(dc, d, rc);
 
     r = { pad, S(218), rc.change.left - S(12), S(234) };
     DrawLabel(dc, g_fonts.label, kFaint, L"BACKUP FOLDER", r, DT_LEFT | DT_VCENTER, Tracking());
@@ -302,8 +379,40 @@ static void SetError(BackupDialog* d, const WString& text)
     InvalidateRect(d->hwnd, NULL, FALSE);
 }
 
+static void RememberChoice(BackupDialog* d, const WString& module)
+{
+    // Remember the chassis as picked (E91), not its folder.
+    WriteSetting(L"Chassis", SanitizeCode(GetWindowTextString(d->chassis), false));
+    WriteSetting(L"Module", module);
+    RememberModule(module);
+}
+
+static void DoConfirmEcu(BackupDialog* d)
+{
+    WString chassis, module;
+    if (!ReadCodes(d, &chassis, &module)) {
+        SetError(d, L"Enter a chassis and a module first.");
+        SetFocus(GetWindowTextLengthW(d->chassis) ? d->module : d->chassis);
+        return;
+    }
+    WString vehicle = GetWindowTextString(d->vehicle);
+    size_t b = vehicle.find_first_not_of(L" \t");
+    vehicle = b == WString::npos ? WString() : vehicle.substr(b, vehicle.find_last_not_of(L" \t") - b + 1);
+    d->choice->chassis = SanitizeCode(GetWindowTextString(d->chassis), false);
+    d->choice->daten = chassis;
+    d->choice->module = module;
+    d->choice->vehicle = vehicle;
+    RememberChoice(d, module);
+    d->succeeded = true;
+    d->done = true;
+}
+
 static void DoBackup(BackupDialog* d)
 {
+    if (d->ecuMode) {
+        DoConfirmEcu(d);
+        return;
+    }
     WString chassis, module;
     if (!ReadCodes(d, &chassis, &module)) {
         SetError(d, L"Enter a chassis and a module first.");
@@ -330,10 +439,7 @@ static void DoBackup(BackupDialog* d)
         SetError(d, L"Backup failed. " + SystemErrorText(err));
         return;
     }
-    // Remember the chassis as picked (E91), not its folder.
-    WriteSetting(L"Chassis", SanitizeCode(GetWindowTextString(d->chassis), false));
-    WriteSetting(L"Module", module);
-    RememberModule(module);
+    RememberChoice(d, module);
     d->succeeded = true;
     d->done = true;
 }
@@ -377,11 +483,23 @@ static void CreateDialogControls(BackupDialog* d)
     SetWindowTextW(d->module, SanitizeCode(ReadSetting(L"Module"), true).c_str());
     UpdateForChassis(d);  // fills the module list, detects the module
 
-    d->changeFolder = CreateThemedButton(d->hwnd, IDC_CHANGE_FOLDER, L"CHANGE", BUTTON_LINK, kPage);
-    d->cancel = CreateThemedButton(d->hwnd, IDCANCEL, L"CANCEL", BUTTON_SECONDARY, kPage);
-    d->ok = CreateThemedButton(d->hwnd, IDC_DO_BACKUP, L"BACK UP", BUTTON_PRIMARY, kPage);
-    MoveWindow(d->changeFolder, r.change.left, r.change.top, r.change.right - r.change.left,
-               r.change.bottom - r.change.top, FALSE);
+    if (d->ecuMode) {
+        d->vehicle = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+                                     r.vehicle.left, r.vehicle.top, r.vehicle.right - r.vehicle.left,
+                                     r.vehicle.bottom - r.vehicle.top, d->hwnd, (HMENU)(INT_PTR)IDC_VEHICLE,
+                                     GetModuleHandleW(NULL), NULL);
+        SendMessageW(d->vehicle, WM_SETFONT, (WPARAM)g_fonts.mono, FALSE);
+        SendMessageW(d->vehicle, EM_LIMITTEXT, kMaxVehicleLength, 0);
+        SetWindowTextW(d->vehicle, d->choice->vehicle.c_str());
+        d->cancel = CreateThemedButton(d->hwnd, IDC_READ_AGAIN, L"READ AGAIN", BUTTON_SECONDARY, kPage);
+        d->ok = CreateThemedButton(d->hwnd, IDC_DO_BACKUP, L"CONFIRM", BUTTON_PRIMARY, kPage);
+    } else {
+        d->changeFolder = CreateThemedButton(d->hwnd, IDC_CHANGE_FOLDER, L"CHANGE", BUTTON_LINK, kPage);
+        d->cancel = CreateThemedButton(d->hwnd, IDCANCEL, L"CANCEL", BUTTON_SECONDARY, kPage);
+        d->ok = CreateThemedButton(d->hwnd, IDC_DO_BACKUP, L"BACK UP", BUTTON_PRIMARY, kPage);
+        MoveWindow(d->changeFolder, r.change.left, r.change.top, r.change.right - r.change.left,
+                   r.change.bottom - r.change.top, FALSE);
+    }
     MoveWindow(d->cancel, r.cancel.left, r.cancel.top, r.cancel.right - r.cancel.left,
                r.cancel.bottom - r.cancel.top, FALSE);
     MoveWindow(d->ok, r.ok.left, r.ok.top, r.ok.right - r.ok.left, r.ok.bottom - r.ok.top, FALSE);
@@ -459,6 +577,14 @@ static LRESULT CALLBACK DialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         case IDC_DO_BACKUP:
             DoBackup(d);
             return 0;
+        case IDC_READ_AGAIN:
+            d->readAgain = true;
+            d->done = true;
+            return 0;
+        case IDC_VEHICLE:
+            if (HIWORD(wParam) == EN_SETFOCUS || HIWORD(wParam) == EN_KILLFOCUS)
+                InvalidateRect(hwnd, NULL, FALSE);  // the field's frame shows focus
+            return 0;
         case IDOK: {  // Enter: press the focused button, else back up
             HWND focus = GetFocus();
             if (focus == d->cancel || focus == d->changeFolder)
@@ -480,19 +606,22 @@ static LRESULT CALLBACK DialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
+static void LoadTraceAndDaten(BackupDialog* d, const WString& trace, const WString& workDir)
+{
+    d->datenDir = FindDatenDir(NormalizeDir(workDir));
+    d->chassisList = LoadChassisList(d->datenDir);
+    String data;
+    d->traceRead = ReadFileBytes(trace, &data);
+    if (d->traceRead)
+        d->trace = ParseTrace(data.data(), data.size());
+}
+
 bool RunBackupDialog(HWND owner, const WString& source, WString& backupDir, WString* created)
 {
     BackupDialog d = {};
     d.source = source;
     d.backupDir = &backupDir;
-
-    WString workDir = source.substr(0, source.size() - FileNameOf(source).size());
-    d.datenDir = FindDatenDir(NormalizeDir(workDir));
-    d.chassisList = LoadChassisList(d.datenDir);
-    String data;
-    d.traceRead = ReadFileBytes(source, &data);
-    if (d.traceRead)
-        d.trace = ParseTrace(data.data(), data.size());
+    LoadTraceAndDaten(&d, source, source.substr(0, source.size() - FileNameOf(source).size()));
 
     HWND hwnd = CreateModal(owner, kDialogClass, DialogProc, L"Back up TRC", S(520), S(460), &d);
     if (!hwnd)
@@ -502,4 +631,24 @@ bool RunBackupDialog(HWND owner, const WString& source, WString& backupDir, WStr
     if (d.succeeded)
         *created = d.created;
     return d.succeeded;
+}
+
+EcuResult RunEcuDialog(HWND owner, const WString& trace, const WString& workDir, const WString& label,
+                       const WString& info, const WString& stamp, EcuChoice* choice)
+{
+    BackupDialog d = {};
+    d.ecuMode = true;
+    d.source = trace;
+    d.label = label;
+    d.info = info;
+    d.stamp = stamp;
+    d.choice = choice;
+    LoadTraceAndDaten(&d, trace, workDir);
+
+    HWND hwnd = CreateModal(owner, kDialogClass, DialogProc, L"Trace captured", S(520), S(540), &d);
+    if (!hwnd)
+        return ECU_CLOSED;
+    SendMessageW(d.chassis, CB_SETEDITSEL, 0, MAKELPARAM(0, -1));
+    RunModal(owner, hwnd, d.chassis, &d.done);
+    return d.succeeded ? ECU_CONFIRMED : d.readAgain ? ECU_READ_AGAIN : ECU_CLOSED;
 }
