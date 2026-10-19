@@ -735,7 +735,7 @@ static WString ToolMeta(int tool, COLORREF* color)
     if (tool == 1) {
         if (g.backupJustNow && g.backupWasMan) {
             *color = kGood;
-            return L"EMPTIED " + FormatClock(g.backupTime) + L", SAVED FIRST";
+            return L"EMPTIED " + FormatClock(g.backupTime);
         }
         const FileEntry* man = FindFile(kManName);
         if (!man)

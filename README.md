@@ -10,33 +10,43 @@
   <img src="https://img.shields.io/badge/Windows-XP%20to%2011-0078D6" alt="Windows XP to 11">
 </p>
 
-A small, portable Windows helper for BMW NCS Expert coding. It watches the files NCS Expert writes to `C:\NCSEXPER\WORK` and takes care of the routine around a coding session: backing up the trace, emptying the MAN file and comparing your edits before you code the car.
+A small, portable Windows helper for BMW NCS Expert coding. It watches the files NCS Expert writes to `C:\NCSEXPER\WORK` and takes care of the routine around coding: preparing the WORK folder, keeping a copy of every trace and MAN file, comparing your edits before you code and checking the result after.
+
+> [!NOTE]
+> Workbench is a companion to NCS Expert and NCS Dummy, not a replacement. It doesn't talk to the car or edit coding; it manages the files the two tools exchange. It assumes you already know both tools and their workflows, and doesn't teach them.
 
 One self-contained `NCS-Workbench.exe`, no installer, no runtimes. Runs on Windows XP (32-bit) through Windows 11, including XP virtual machines.
+
+![NCS Workbench home screen: START SESSION, the three tools, recent sessions and the WORK folder's files](docs/screenshots/sessions/01-home.png)
 
 ## Features
 
 ### Guided coding sessions
 
-Click **START SESSION** and Workbench walks you through a whole coding job, with NCS Expert doing the reading and coding and NCS Dummy the editing:
+**START SESSION** walks you through a whole coding job. NCS Expert reads and codes, NCS Dummy edits, and Workbench handles everything in between:
 
-1. **Prepare.** Workbench shows what will happen, saves `FSW_PSW.TRC` and `FSW_PSW.MAN` to a new session folder, then deletes the TRC and empties the MAN. Nothing else in WORK is touched, and nothing is changed before its copy is saved. If the TRC in WORK is a read you just made, you can use it as the first read instead.
-2. **Read the ECU.** Run `CODIERDATEN_LESEN` in NCS Expert. The new trace is picked up on its own once NCS Expert has finished writing it, then you confirm the chassis and module (suggested from SP-Daten when it's installed).
-3. **Edit in NCS Dummy.** **OPEN NCS DUMMY** starts it; open the session's `CHASSIS-MODULE-...-FSW_PSW.TRC` copy, change what you want and export `FSW_PSW.MAN` to WORK. Every export is saved.
-4. **Review.** The changes the MAN makes, function by function. Odd lines, duplicates or unreadable files are flagged, with the raw files a click away.
-5. **Code.** A checklist for NCS Expert (`SG_CODIEREN`). Workbench never talks to the car: you click **I HAVE CODED** when NCS Expert is done. If the MAN in WORK changed since the review, you review it again first.
-6. **Read back.** Workbench saves and clears WORK again; read the ECU once more and every change shows as **MATCH**, **MISMATCH** or **CAN'T VERIFY**. A match means the ECU holds the value, not that the feature works.
-7. **Finish.** Mark the outcome (it can't contradict the read-back), and optionally empty a MAN left in WORK.
+1. **Prepare:** saves `FSW_PSW.TRC` and `FSW_PSW.MAN` to a new session folder, then clears them for a fresh read.
+2. **Read the ECU:** picks up the new trace from NCS Expert on its own; you confirm which ECU it was.
+3. **Edit in NCS Dummy:** opens NCS Dummy on a copy it can read the chassis and module from, and saves every MAN you export.
+4. **Review:** shows what the MAN will change, and flags anything odd in the files.
+5. **Code:** a checklist for `SG_CODIEREN` in NCS Expert. You confirm when coding is done.
+6. **Read back:** read the ECU again; each change shows as **MATCH**, **MISMATCH** or **CAN'T VERIFY**.
+7. **Finish:** record the outcome. It can't contradict the read-back.
 
-Every session keeps its files and a `session.ini` record in `Sessions\` inside your backup folder. **HISTORY** lists them with their changes and read-back results, opens the saved files and exports a session's folder. If Workbench closes mid-session, it offers to pick up where you left off and changes nothing until you choose. Only one session at a time can use a WORK folder.
+Nothing in WORK is deleted or emptied before its copy is saved and checked, and only `FSW_PSW.TRC` and `FSW_PSW.MAN` are ever touched. Workbench never talks to the car. Every session's files and record stay in your backup folder, browsable in **HISTORY**, and a session interrupted by a crash or a closed window can be resumed.
 
 ### Tools
 
-Outside a session, the three manual tools work as before, with the WORK folder's files listed alongside and refreshed automatically.
+Outside a session, three manual tools do one job each:
 
-1. **Back up the TRC.** Pick the chassis and `FSW_PSW.TRC` is copied to your backup folder as `CHASSIS-MODULE-YYYYMMDD-HHMM-FSW_PSW.TRC`, the format NCS Dummy reads the chassis and module from. With SP-Daten installed (`C:\NCSEXPER\DATEN`), the chassis list comes from it and the module is detected from the trace itself. An E91 DSC read becomes `E89-MK60_87.C0A-20261019-1012-FSW_PSW.TRC`, since the E91 shares the E89 data folder. Without SP-Daten, type both. Existing backups are never overwritten.
-2. **Empty the MAN.** After a confirmation, the current `FSW_PSW.MAN` is backed up as `YYYYMMDD-HHMM-FSW_PSW.MAN`, then emptied for a fresh edit in NCS Dummy.
-3. **Compare TRC with MAN.** A table of `Function | TRC | MAN`, matched by function name, shows exactly what will change when you code. Changed functions and functions found in only one file are highlighted. The step's status line keeps a live count of changes.
+- **Back up the TRC** as `CHASSIS-MODULE-YYYYMMDD-HHMM-FSW_PSW.TRC`, the name NCS Dummy reads the chassis and module from. With SP-Daten installed (`C:\NCSEXPER\DATEN`), the module is detected from the trace.
+- **Empty the MAN** for a fresh edit, backing it up first.
+- **Compare TRC with MAN** function by function, with a live count of changes.
+
+## Guides
+
+- [Guided coding sessions](docs/guides/guided-sessions.md): every step of a session with screenshots, what can go wrong at each one, the history window and what's saved.
+- [Main window and tools](docs/guides/main-window.md): the home screen, the WORK folder panel and the three manual tools.
 
 ## Download
 
@@ -46,52 +56,12 @@ Get `NCS-Workbench.exe` from the [Releases](../../releases) page and run it from
 
 - **WORK folder:** defaults to `C:\NCSEXPER\WORK`. Change it with **CHANGE** under the file list.
 - **Backup folder:** there's no default. You're asked to choose one the first time a backup or session needs it, and you can change it at any time. Sessions go in its `Sessions` folder.
-- **NCS Dummy:** you're asked for `NcsDummy.exe` the first time you click **OPEN NCS DUMMY**; **CHANGE** in step 03 picks another.
-- **Typical session:** **START SESSION** and follow the steps. Without a session: read the module in NCS Expert, back up the TRC, empty the MAN, edit in NCS Dummy, compare, then code from NCS Expert.
+- **NCS Dummy:** you're asked for `NcsDummy.exe` the first time you click **OPEN NCS DUMMY**.
+- **Typical job:** click **START SESSION** and follow the steps. Without a session: read the module in NCS Expert, back up the TRC, empty the MAN, edit in NCS Dummy, compare, then code from NCS Expert.
 
 ### Settings
 
-Settings are stored per user in the registry under `HKEY_CURRENT_USER\Software\NCS Workbench`. The key is created on the first change, so just running the app leaves nothing behind. To reset, delete that key.
-
-## UI walkthrough
-
-These screenshots show the manual tools from before guided sessions, when they were the home screen's three steps. They now sit under **TOOLS** on the home screen and work the same.
-
-### 1. First launch
-
-The home screen shows the three coding steps and the files in the WORK folder. Here, the TRC is ready to back up and the MAN file is empty.
-
-![Home screen with the TRC ready to back up and the MAN file empty](docs/screenshots/01-first-launch.png)
-
-### 2. Back up the TRC
-
-Click **BACK UP** to review the chassis, detected module, backup folder and generated filename before saving the trace.
-
-![Backup dialog showing the E89 chassis, detected MK60_87.C0A module and backup filename](docs/screenshots/02-backup-modal.png)
-
-### 3. Backup complete
-
-The home screen confirms the backup with a green status panel. Click **SHOW** to locate the saved file.
-
-![Home screen after a successful TRC backup, with the saved filename highlighted in green](docs/screenshots/03-backup-complete.png)
-
-### 4. MAN change detected
-
-After editing and saving the MAN file in NCS Dummy, the home screen updates automatically. The comparison status shows one changed function and **COMPARE** becomes available.
-
-![Home screen detecting a nonempty MAN file and one changed function](docs/screenshots/04-man-change-detected.png)
-
-### 5. Compare changes only
-
-Click **COMPARE** to review the differences between the TRC read from the car and the MAN prepared for coding. In this example, `C0A_V_EINHEIT` changes from `wert_01` to `wert_02`.
-
-![Comparison showing only the changed C0A_V_EINHEIT function, from wert_01 to wert_02](docs/screenshots/05-compare-changes-only.png)
-
-### 6. Show all functions
-
-Click **SHOW ALL** to include unchanged functions for context. Changed values remain highlighted; click **CHANGES ONLY** to return to the filtered view.
-
-![Comparison showing unchanged functions alongside the highlighted changed function](docs/screenshots/06-compare-show-all.png)
+Settings are stored per user in the registry under `HKEY_CURRENT_USER\Software\NCS Workbench`. The key is created on the first change, so just running the app leaves nothing behind. To reset, delete that key. Sessions aren't settings: they stay in the backup folder.
 
 ## Building
 
@@ -128,6 +98,7 @@ src/trace.h     TRC/MAN parser, checks, diff and read-back verification (no Wind
 src/session.*   guided session: state machine, snapshots, WORK changes (no UI)
 src/ncsdata.h   SP-Daten file parser (no Windows headers)
 test/           parser, diff and session tests (the session tests use a mock WORK folder)
+docs/guides/    user guides; screenshots in docs/screenshots/
 samples/        real FSW_PSW.TRC / FSW_PSW.MAN files used by the tests
 fonts/          embedded Onest and Geist Mono fonts with their licences
 tools/          icon generator
