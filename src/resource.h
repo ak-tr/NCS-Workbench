@@ -1,0 +1,8 @@
+#pragma once
+
+#define IDI_APP 1
+
+#define IDR_FONT_ONEST 201
+#define IDR_FONT_ONEST_MEDIUM 202
+#define IDR_FONT_GEIST_MONO 203
+#define IDR_FONT_GEIST_MONO_MEDIUM 204

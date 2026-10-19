@@ -1,0 +1,41 @@
+#include <windows.h>
+#include "resource.h"
+#include "version.h"
+
+IDI_APP ICON "app.ico"
+
+// Embedded fonts (SIL OFL 1.1, licences in fonts/), loaded with AddFontMemResourceEx.
+IDR_FONT_ONEST             RCDATA "fonts/Onest-Regular.ttf"
+IDR_FONT_ONEST_MEDIUM      RCDATA "fonts/Onest-Medium.ttf"
+IDR_FONT_GEIST_MONO        RCDATA "fonts/GeistMono-Regular.ttf"
+IDR_FONT_GEIST_MONO_MEDIUM RCDATA "fonts/GeistMono-Medium.ttf"
+
+// comctl32 v6. trustInfo uses the asm.v2 namespace: the v3 form breaks XP SP2.
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "app.manifest"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     APP_VERSION_MAJOR,APP_VERSION_MINOR,APP_VERSION_PATCH,0
+PRODUCTVERSION  APP_VERSION_MAJOR,APP_VERSION_MINOR,APP_VERSION_PATCH,0
+FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+FILEFLAGS       0
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     0
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "FileDescription",  "NCS Workbench"
+            VALUE "FileVersion",      APP_VERSION_STRING
+            VALUE "InternalName",     "NCS-Workbench"
+            VALUE "OriginalFilename", "NCS-Workbench.exe"
+            VALUE "ProductName",      "NCS Workbench"
+            VALUE "ProductVersion",   APP_VERSION_STRING
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

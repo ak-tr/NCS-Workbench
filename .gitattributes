@@ -1,0 +1,10 @@
+* text=auto
+
+# cmd.exe misreads labels/goto in LF batch files.
+*.cmd text eol=crlf
+
+# Real NCS files: keep their CRLF bytes exactly.
+samples/** -text
+
+*.ttf binary
+*.ico binary
