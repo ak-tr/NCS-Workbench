@@ -25,7 +25,8 @@ rem libc++abi/libunwind (Vista-only imports) out of the exe; see src\xpstd.h.
   -DUNICODE -D_UNICODE -D_WIN32_WINNT=0x0501 -DWINVER=0x0501 -D_WIN32_IE=0x0600 ^
   -Wl,--major-subsystem-version,5,--minor-subsystem-version,1 ^
   -Wl,--major-os-version,5,--minor-os-version,1 ^
-  src\main.cpp src\backup.cpp src\compare.cpp src\daten.cpp src\man.cpp src\modal.cpp src\theme.cpp src\util.cpp src\xpstd.cpp ^
+  src\main.cpp src\backup.cpp src\compare.cpp src\daten.cpp src\history.cpp src\man.cpp src\modal.cpp ^
+  src\session.cpp src\sessiondlg.cpp src\theme.cpp src\util.cpp src\xpstd.cpp ^
   build\app.res ^
   -o %OUT% ^
   -lcomctl32 -lcomdlg32 -lshell32 -lole32 -ladvapi32 || goto :fail

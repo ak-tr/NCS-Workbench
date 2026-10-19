@@ -45,7 +45,8 @@ extern Fonts g_fonts;
 extern HBRUSH g_fieldBrush;  // input backgrounds (WM_CTLCOLOREDIT/LISTBOX)
 
 // DANGER: red fill, for the confirm button of a destructive action.
-enum ButtonKind { BUTTON_PRIMARY, BUTTON_SECONDARY, BUTTON_DANGER, BUTTON_LINK };
+// CHECK: square box + label (also used as a radio); the parent flips it on BN_CLICKED.
+enum ButtonKind { BUTTON_PRIMARY, BUTTON_SECONDARY, BUTTON_DANGER, BUTTON_LINK, BUTTON_CHECK };
 
 // Call once before creating windows: DPI awareness, fonts, brushes.
 void InitTheme();
@@ -59,6 +60,8 @@ int Tracking();
 // `surface` is the colour behind the button, used for links and disabled states.
 HWND CreateThemedButton(HWND parent, int id, const wchar_t* text, ButtonKind kind, COLORREF surface);
 void DrawThemedButton(const DRAWITEMSTRUCT* dis);
+void SetThemedCheck(HWND button, bool checked);
+bool IsThemedChecked(HWND button);
 
 // Dark title bar on Windows 10 1809+ and 11; no effect on older systems.
 void ApplyDarkFrame(HWND hwnd);
