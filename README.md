@@ -36,6 +36,44 @@ Get `NCS-Workbench.exe` from the [Releases](../../releases) page and run it from
 
 Settings are stored per user in the registry under `HKEY_CURRENT_USER\Software\NCS Workbench`. The key is created on the first change, so just running the app leaves nothing behind. To reset, delete that key.
 
+## UI walkthrough
+
+### 1. First launch
+
+The home screen shows the three coding steps and the files in the WORK folder. Here, the TRC is ready to back up and the MAN file is empty.
+
+![Home screen with the TRC ready to back up and the MAN file empty](docs/screenshots/01-first-launch.png)
+
+### 2. Back up the TRC
+
+Click **BACK UP** to review the chassis, detected module, backup folder and generated filename before saving the trace.
+
+![Backup dialog showing the E89 chassis, detected MK60_87.C0A module and backup filename](docs/screenshots/02-backup-modal.png)
+
+### 3. Backup complete
+
+The home screen confirms the backup with a green status panel. Click **SHOW** to locate the saved file.
+
+![Home screen after a successful TRC backup, with the saved filename highlighted in green](docs/screenshots/03-backup-complete.png)
+
+### 4. MAN change detected
+
+After editing and saving the MAN file in NCS Dummy, the home screen updates automatically. The comparison status shows one changed function and **COMPARE** becomes available.
+
+![Home screen detecting a nonempty MAN file and one changed function](docs/screenshots/04-man-change-detected.png)
+
+### 5. Compare changes only
+
+Click **COMPARE** to review the differences between the TRC read from the car and the MAN prepared for coding. In this example, `C0A_V_EINHEIT` changes from `wert_01` to `wert_02`.
+
+![Comparison showing only the changed C0A_V_EINHEIT function, from wert_01 to wert_02](docs/screenshots/05-compare-changes-only.png)
+
+### 6. Show all functions
+
+Click **SHOW ALL** to include unchanged functions for context. Changed values remain highlighted; click **CHANGES ONLY** to return to the filtered view.
+
+![Comparison showing unchanged functions alongside the highlighted changed function](docs/screenshots/06-compare-show-all.png)
+
 ## Building
 
 Requirements:
