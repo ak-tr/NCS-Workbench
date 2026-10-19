@@ -455,11 +455,11 @@ static HWND CreateCombo(BackupDialog* d, int id, const RECT& r)
     SendMessageW(h, CB_LIMITTEXT, kMaxCodeLength, 0);
     SendMessageW(h, CB_SETITEMHEIGHT, (WPARAM)-1, S(30));  // the edit field
     SendMessageW(h, CB_SETITEMHEIGHT, 0, S(24));           // list rows
-    ApplyDarkControl(h, L"DarkMode_CFD");
+    ApplyThemedControl(h, L"DarkMode_CFD");
     COMBOBOXINFO info = {};
     info.cbSize = sizeof(info);
     if (GetComboBoxInfo(h, &info))
-        ApplyDarkControl(info.hwndList, L"DarkMode_Explorer");
+        ApplyThemedControl(info.hwndList, L"DarkMode_Explorer");
     return h;
 }
 

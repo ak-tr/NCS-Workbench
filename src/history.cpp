@@ -359,7 +359,7 @@ static HWND CreateList(HistoryDialog* d, int id, COLORREF bg, int rowHeight, HIM
     col.mask = LVCF_WIDTH;
     col.cx = S(400);
     ListView_InsertColumn(list, 0, &col);
-    ApplyDarkControl(list, L"DarkMode_Explorer");
+    ApplyThemedControl(list, L"DarkMode_Explorer");
     return list;
 }
 

@@ -8,17 +8,123 @@
 Fonts g_fonts;
 HBRUSH g_fieldBrush;
 
+COLORREF kPage, kTile1, kTile2, kTile3, kPanel, kRule, kBorder, kNumber;
+COLORREF kWhite, kInvert, kPressed;
+COLORREF kText, kSecondary, kMuted, kFaint, kDisabled;
+COLORREF kAccent, kSelect, kGood, kWarn, kBad, kBadHot, kBadPressed;
+
 static int g_dpi = 96;
 static HMODULE g_dwmapi, g_uxtheme;  // loaded in InitTheme
 static HANDLE g_fontHandles[4];
+static int g_theme = THEME_DAKOTA_BLACK;
 
 struct ButtonInfo {
     WNDPROC proc;
     ButtonKind kind;
-    COLORREF surface;
+    const COLORREF* surface;
     bool hot;
     bool checked;  // BUTTON_CHECK
 };
+
+// ---------------------------------------------------------------------------
+// Colour schemes
+
+struct Palette {
+    const wchar_t* name;
+    bool light;
+    // Same order as the variables in theme.h.
+    COLORREF page, tile1, tile2, tile3, panel, rule, border, number;
+    COLORREF white, invert, pressed;
+    COLORREF text, secondary, muted, faint, disabled;
+    COLORREF accent, select, good, warn, bad, badHot, badPressed;
+};
+
+// Text colours keep at least 4.5:1 against the darkest tile, except
+// disabled (and Dakota Black's faint, the original Mosaic grey).
+static const Palette kPalettes[THEME_COUNT] = {
+    { L"Dakota Black", false,
+      RGB(0x00, 0x00, 0x00), RGB(0x11, 0x11, 0x11), RGB(0x16, 0x16, 0x16), RGB(0x0c, 0x0c, 0x0c),
+      RGB(0x08, 0x08, 0x08), RGB(0x26, 0x26, 0x26), RGB(0x40, 0x40, 0x40), RGB(0x2a, 0x2a, 0x2a),
+      RGB(0xff, 0xff, 0xff), RGB(0xf2, 0xf2, 0xf2), RGB(0xd4, 0xd4, 0xd4),
+      RGB(0xe5, 0xe5, 0xe5), RGB(0xa3, 0xa3, 0xa3), RGB(0x8a, 0x8a, 0x8a), RGB(0x73, 0x73, 0x73),
+      RGB(0x52, 0x52, 0x52),
+      RGB(0x4c, 0x8d, 0xff), RGB(0x12, 0x2b, 0x52), RGB(0x3d, 0xd6, 0x8c), RGB(0xff, 0xb2, 0x24),
+      RGB(0xff, 0x6b, 0x6b), RGB(0xff, 0x8a, 0x8a), RGB(0xe0, 0x55, 0x55) },
+    // BMW Individual headliner: neutral charcoal.
+    { L"Anthracite", false,
+      RGB(0x1c, 0x1d, 0x1f), RGB(0x25, 0x26, 0x2a), RGB(0x2a, 0x2b, 0x2f), RGB(0x22, 0x23, 0x26),
+      RGB(0x1f, 0x20, 0x22), RGB(0x36, 0x37, 0x3b), RGB(0x50, 0x51, 0x57), RGB(0x3a, 0x3b, 0x40),
+      RGB(0xff, 0xff, 0xff), RGB(0xf0, 0xf0, 0xf0), RGB(0xd0, 0xd0, 0xd2),
+      RGB(0xe6, 0xe6, 0xe6), RGB(0xb0, 0xb0, 0xb2), RGB(0xa3, 0xa3, 0xa7), RGB(0x96, 0x96, 0x9a),
+      RGB(0x5e, 0x5f, 0x63),
+      RGB(0x6a, 0xa0, 0xff), RGB(0x23, 0x40, 0x6e), RGB(0x45, 0xd8, 0x92), RGB(0xff, 0xb8, 0x3a),
+      RGB(0xff, 0x7a, 0x7a), RGB(0xff, 0x9a, 0x9a), RGB(0xe8, 0x64, 0x64) },
+    // Dakota/Vernasca Mocha: warm brown-black.
+    { L"Mocha", false,
+      RGB(0x21, 0x1d, 0x1a), RGB(0x2a, 0x26, 0x22), RGB(0x30, 0x2b, 0x27), RGB(0x26, 0x22, 0x1e),
+      RGB(0x24, 0x1f, 0x1c), RGB(0x3a, 0x34, 0x30), RGB(0x57, 0x50, 0x4a), RGB(0x40, 0x39, 0x33),
+      RGB(0xff, 0xfb, 0xf6), RGB(0xef, 0xe9, 0xe1), RGB(0xd2, 0xcb, 0xc2),
+      RGB(0xea, 0xe4, 0xdd), RGB(0xb8, 0xaf, 0xa5), RGB(0xaa, 0xa1, 0x97), RGB(0x9e, 0x94, 0x89),
+      RGB(0x62, 0x5a, 0x53),
+      RGB(0x6a, 0xa0, 0xff), RGB(0x2a, 0x3f, 0x63), RGB(0x45, 0xd8, 0x92), RGB(0xff, 0xb8, 0x3a),
+      RGB(0xff, 0x7a, 0x7a), RGB(0xff, 0x9a, 0x9a), RGB(0xe8, 0x64, 0x64) },
+    // Vernasca Canberra Beige: warm sand. Tiles are darker than the page.
+    { L"Canberra Beige", true,
+      RGB(0xf1, 0xe9, 0xda), RGB(0xe7, 0xdd, 0xcb), RGB(0xe2, 0xd7, 0xc3), RGB(0xeb, 0xe2, 0xd1),
+      RGB(0xed, 0xe4, 0xd4), RGB(0xd8, 0xcc, 0xb5), RGB(0xb8, 0xa9, 0x8f), RGB(0xd2, 0xc5, 0xac),
+      RGB(0x12, 0x0e, 0x08), RGB(0x23, 0x1d, 0x14), RGB(0x4d, 0x43, 0x34),
+      RGB(0x23, 0x1d, 0x14), RGB(0x4d, 0x43, 0x34), RGB(0x5a, 0x4f, 0x3f), RGB(0x62, 0x56, 0x45),
+      RGB(0xa8, 0x9c, 0x86),
+      RGB(0x1a, 0x50, 0xc0), RGB(0xd3, 0xdc, 0xea), RGB(0x11, 0x6b, 0x3f), RGB(0x7a, 0x4c, 0x00),
+      RGB(0xa8, 0x20, 0x20), RGB(0x8e, 0x1a, 0x1a), RGB(0x6e, 0x12, 0x12) },
+    // M Merino Silverstone: plain light grey.
+    { L"Silverstone", true,
+      RGB(0xee, 0xee, 0xec), RGB(0xe3, 0xe3, 0xe1), RGB(0xde, 0xde, 0xdc), RGB(0xe6, 0xe6, 0xe4),
+      RGB(0xe9, 0xe9, 0xe7), RGB(0xd2, 0xd2, 0xcf), RGB(0xab, 0xab, 0xa7), RGB(0xcc, 0xcc, 0xc9),
+      RGB(0x0a, 0x0a, 0x0a), RGB(0x1a, 0x1a, 0x1a), RGB(0x44, 0x44, 0x44),
+      RGB(0x1a, 0x1a, 0x1a), RGB(0x44, 0x44, 0x44), RGB(0x52, 0x52, 0x52), RGB(0x5c, 0x5c, 0x5c),
+      RGB(0xa3, 0xa3, 0xa0),
+      RGB(0x1a, 0x50, 0xc0), RGB(0xd3, 0xdc, 0xec), RGB(0x11, 0x6b, 0x3f), RGB(0x7a, 0x4c, 0x00),
+      RGB(0xa8, 0x20, 0x20), RGB(0x8e, 0x1a, 0x1a), RGB(0x6e, 0x12, 0x12) },
+};
+
+const wchar_t* ThemeName(int theme)
+{
+    return kPalettes[theme >= 0 && theme < THEME_COUNT ? theme : 0].name;
+}
+
+int ThemeFromName(const wchar_t* name)
+{
+    for (int i = 0; i < THEME_COUNT; ++i)
+        if (lstrcmpiW(name, kPalettes[i].name) == 0)
+            return i;
+    return THEME_DAKOTA_BLACK;
+}
+
+int CurrentTheme()
+{
+    return g_theme;
+}
+
+bool IsLightTheme()
+{
+    return kPalettes[g_theme].light;
+}
+
+void SetTheme(int theme)
+{
+    g_theme = theme >= 0 && theme < THEME_COUNT ? theme : THEME_DAKOTA_BLACK;
+    const Palette& p = kPalettes[g_theme];
+    kPage = p.page, kTile1 = p.tile1, kTile2 = p.tile2, kTile3 = p.tile3;
+    kPanel = p.panel, kRule = p.rule, kBorder = p.border, kNumber = p.number;
+    kWhite = p.white, kInvert = p.invert, kPressed = p.pressed;
+    kText = p.text, kSecondary = p.secondary, kMuted = p.muted, kFaint = p.faint, kDisabled = p.disabled;
+    kAccent = p.accent, kSelect = p.select, kGood = p.good, kWarn = p.warn;
+    kBad = p.bad, kBadHot = p.badHot, kBadPressed = p.badPressed;
+    if (g_fieldBrush)
+        DeleteObject(g_fieldBrush);
+    g_fieldBrush = CreateSolidBrush(kTile1);
+}
 
 int S(int px)
 {
@@ -95,7 +201,7 @@ void InitTheme()
     g_fonts.body = MakeFont(sans, 13, FW_NORMAL);
     g_fonts.heading = MakeFont(sansMedium, 22, mediumWeight);
 
-    g_fieldBrush = CreateSolidBrush(kTile1);
+    SetTheme(g_theme);  // also creates g_fieldBrush
     g_dwmapi = LoadSystemDll(L"dwmapi.dll");  // Vista+, absent on XP
     g_uxtheme = LoadSystemDll(L"uxtheme.dll");
 }
@@ -109,6 +215,7 @@ void ShutdownTheme()
         *f = NULL;
     }
     DeleteObject(g_fieldBrush);
+    g_fieldBrush = NULL;
     for (HANDLE& h : g_fontHandles) {
         if (h)
             RemoveFontMemResourceEx(h);
@@ -274,13 +381,13 @@ static LRESULT CALLBACK ButtonProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
     return CallWindowProcW(proc, hwnd, msg, wParam, lParam);
 }
 
-HWND CreateThemedButton(HWND parent, int id, const wchar_t* text, ButtonKind kind, COLORREF surface)
+HWND CreateThemedButton(HWND parent, int id, const wchar_t* text, ButtonKind kind, const COLORREF& surface)
 {
     HWND h = CreateWindowExW(0, L"BUTTON", text, WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
                              0, 0, 0, 0, parent, (HMENU)(INT_PTR)id, GetModuleHandleW(NULL), NULL);
     ButtonInfo* info = new ButtonInfo;
     info->kind = kind;
-    info->surface = surface;
+    info->surface = &surface;
     info->hot = false;
     info->checked = false;
     info->proc =(WNDPROC)GetWindowLongPtrW(h, GWLP_WNDPROC);
@@ -305,7 +412,7 @@ void DrawThemedButton(const DRAWITEMSTRUCT* dis)
     GetWindowTextW(dis->hwndItem, text, 160);
 
     if (info->kind == BUTTON_CHECK) {
-        Fill(dc, rc, info->surface);
+        Fill(dc, rc, *info->surface);
         int box = S(14), cy = (rc.top + rc.bottom) / 2;
         RECT b = { rc.left + S(2), cy - box / 2, rc.left + S(2) + box, cy - box / 2 + box };
         if (info->checked && !disabled) {
@@ -329,7 +436,7 @@ void DrawThemedButton(const DRAWITEMSTRUCT* dis)
     }
 
     if (info->kind == BUTTON_LINK) {
-        Fill(dc, rc, info->surface);
+        Fill(dc, rc, *info->surface);
         HGDIOBJ oldFont = SelectObject(dc, g_fonts.button);
         int oldExtra = SetTextCharacterExtra(dc, Tracking());
         SIZE size;
@@ -351,7 +458,7 @@ void DrawThemedButton(const DRAWITEMSTRUCT* dis)
 
     COLORREF bg, fg, border;
     if (disabled) {
-        bg = info->surface;
+        bg = *info->surface;
         fg = kDisabled;
         border = kRule;
     } else if (info->kind == BUTTON_PRIMARY) {
@@ -359,7 +466,7 @@ void DrawThemedButton(const DRAWITEMSTRUCT* dis)
         fg = kPage;
         border = bg;
     } else if (info->kind == BUTTON_DANGER) {
-        bg = pressed ? RGB(0xe0, 0x55, 0x55) : hot ? RGB(0xff, 0x8a, 0x8a) : kBad;
+        bg = pressed ? kBadPressed : hot ? kBadHot : kBad;
         fg = kPage;
         border = bg;
     } else {
@@ -391,15 +498,15 @@ bool IsThemedChecked(HWND button)
 }
 
 // ---------------------------------------------------------------------------
-// Windows 10/11 dark frame and controls
+// Windows 10/11 frame and controls
 
-void ApplyDarkFrame(HWND hwnd)
+void ApplyThemedFrame(HWND hwnd)
 {
     typedef HRESULT(WINAPI * SetAttributeFn)(HWND, DWORD, LPCVOID, DWORD);
     SetAttributeFn set = GetProc<SetAttributeFn>(g_dwmapi, "DwmSetWindowAttribute");
     if (!set)
         return;
-    BOOL dark = TRUE;
+    BOOL dark = !IsLightTheme();
     // DWMWA_USE_IMMERSIVE_DARK_MODE is 20, or 19 before Windows 10 20H1.
     if (FAILED(set(hwnd, 20, &dark, sizeof(dark))))
         set(hwnd, 19, &dark, sizeof(dark));
@@ -410,10 +517,11 @@ void ApplyDarkFrame(HWND hwnd)
     set(hwnd, 34, &border, sizeof(border));
 }
 
-void ApplyDarkControl(HWND hwnd, const wchar_t* subApp)
+void ApplyThemedControl(HWND hwnd, const wchar_t* darkSubApp)
 {
     typedef HRESULT(WINAPI * SetWindowThemeFn)(HWND, LPCWSTR, LPCWSTR);
     SetWindowThemeFn set = GetProc<SetWindowThemeFn>(g_uxtheme, "SetWindowTheme");
+    // Unknown sub-app names fall back to the normal theme, as does NULL.
     if (set)
-        set(hwnd, subApp, NULL);  // unknown sub-app names fall back to the normal theme
+        set(hwnd, IsLightTheme() ? NULL : darkSubApp, NULL);
 }

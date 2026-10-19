@@ -54,6 +54,7 @@ enum {
     IDC_CANCEL_SESSION,
     IDC_PRIMARY,
     IDC_SECONDARY,
+    IDC_THEME,
     IDC_LINK1,  // IDC_LINK1 .. +2
     IDC_CHECK1 = IDC_LINK1 + 3,
 };
@@ -65,7 +66,7 @@ enum FolderState { FOLDER_OK, FOLDER_MISSING, FOLDER_UNREADABLE };
 static const int kToolCount = 3;
 static const wchar_t* const kToolTitles[kToolCount] = { L"Back up TRC", L"Empty MAN", L"Compare" };
 static const wchar_t* const kToolButtons[kToolCount] = { L"BACK UP", L"EMPTY", L"COMPARE" };
-static const COLORREF kToolColors[kToolCount] = { kTile1, kTile2, kTile3 };
+static const COLORREF* const kToolColors[kToolCount] = { &kTile1, &kTile2, &kTile3 };  // the current theme's
 static const int kStageCount = 7;
 static const int kLinkCount = 3;
 static const int kCheckCount = 5;
@@ -94,6 +95,7 @@ struct App {
     HWND startButton = NULL, historyButton = NULL;
     HWND showBackup = NULL, backupDirButton = NULL, list = NULL, workDirButton = NULL;
     HWND cancelSession = NULL, primary = NULL, secondary = NULL;
+    HWND themeButton = NULL;
     HWND links[kLinkCount] = {};
     HWND checks[kCheckCount] = {};
     HWND lastFocus = NULL;
@@ -571,6 +573,16 @@ static RECT BlockLinkRect(const RECT& block)
     return b;
 }
 
+static const wchar_t kVersionLabel[] = L"V" APP_VERSION_STRING;
+
+// THEME / <NAME> in the footer, left of the version.
+static RECT ThemeLinkRect()
+{
+    const RECT& f = g.lay.footer;
+    int versionLeft = f.right - S(20) - TextWidth(g_fonts.label, kVersionLabel, Tracking());
+    return RightLink(g.themeButton, versionLeft - S(20), (f.top + f.bottom) / 2);
+}
+
 static RECT ShowBackupRect()
 {
     RECT change = BlockLinkRect(g.lay.backupDir);
@@ -655,6 +667,7 @@ static void LayoutChildren()
     Place(g.showBackup, ShowBackupRect());
     Show(g.workDirButton, !session);  // the session keeps its WORK folder
     Place(g.workDirButton, BlockLinkRect(l.workDir));
+    Place(g.themeButton, ThemeLinkRect());
 
     // Session controls
     StateUi u = UiFor(g.session.state);
@@ -811,7 +824,7 @@ static void PaintIdle(HDC dc)
     DrawLabel(dc, g_fonts.label, kFaint, L"TOOLS / OUTSIDE A SESSION", l.toolsLabel, DT_LEFT | DT_VCENTER, Tracking());
     for (int i = 0; i < kToolCount; ++i) {
         const RECT& tile = l.tools[i];
-        Fill(dc, tile, kToolColors[i]);
+        Fill(dc, tile, *kToolColors[i]);
         r = { tile.left + S(16), tile.top + S(14), tile.right - S(12), tile.top + S(34) };
         DrawLabel(dc, g_fonts.body, kWhite, kToolTitles[i], r, DT_LEFT | DT_VCENTER);
         COLORREF color;
@@ -1272,11 +1285,10 @@ static void PaintMain(HDC dc, const RECT& client)
     } else {
         wsprintfW(status, L"%d FILE%s / CHECKING EVERY %u S", n, n == 1 ? L"" : L"S", pollSec);
     }
-    // Version on the right, so testers can tell builds apart.
-    const wchar_t* version = L"V" APP_VERSION_STRING;
+    // Version on the right, so testers can tell builds apart; the theme link sits before it.
     RECT vr = { l.footer.right - S(20) - S(120), l.footer.top, l.footer.right - S(20), l.footer.bottom };
-    DrawLabel(dc, g_fonts.label, kFaint, version, vr, DT_RIGHT | DT_VCENTER, Tracking());
-    RECT sr = { l.footer.left + S(20), l.footer.top, vr.left - S(12), l.footer.bottom };
+    DrawLabel(dc, g_fonts.label, kFaint, kVersionLabel, vr, DT_RIGHT | DT_VCENTER, Tracking());
+    RECT sr = { l.footer.left + S(20), l.footer.top, ThemeLinkRect().left - S(20), l.footer.bottom };
     DrawLabel(dc, g_fonts.label, statusColor, status, sr, DT_LEFT | DT_VCENTER, Tracking());
 }
 
@@ -1878,12 +1890,28 @@ static void ShowHistory()
 // ---------------------------------------------------------------------------
 // Window
 
+static void ThemeList()
+{
+    ListView_SetBkColor(g.list, kPanel);
+    ListView_SetTextBkColor(g.list, kPanel);
+    ListView_SetTextColor(g.list, kText);
+    ApplyThemedControl(g.list, L"DarkMode_Explorer");
+}
+
+static void UpdateThemeButton()
+{
+    WString text = L"THEME / ";
+    text += ThemeName(CurrentTheme());
+    CharUpperW(&text[0]);
+    SetWindowTextW(g.themeButton, text.c_str());
+}
+
 static void CreateControls()
 {
     g.startButton = CreateThemedButton(g.hwnd, IDC_START, L"START SESSION", BUTTON_PRIMARY, kTile1);
     g.historyButton = CreateThemedButton(g.hwnd, IDC_HISTORY, L"HISTORY", BUTTON_LINK, kPage);
     for (int i = 0; i < kToolCount; ++i)
-        g.toolButtons[i] = CreateThemedButton(g.hwnd, IDC_BACKUP + i, kToolButtons[i], BUTTON_LINK, kToolColors[i]);
+        g.toolButtons[i] = CreateThemedButton(g.hwnd, IDC_BACKUP + i, kToolButtons[i], BUTTON_LINK, *kToolColors[i]);
 
     g.cancelSession = CreateThemedButton(g.hwnd, IDC_CANCEL_SESSION, L"CANCEL SESSION", BUTTON_LINK, kPage);
     for (int i = 0; i < kCheckCount; ++i)
@@ -1904,9 +1932,7 @@ static void CreateControls()
                                  LVS_SINGLESEL | LVS_SHOWSELALWAYS,
                              0, 0, 0, 0, g.hwnd, (HMENU)(INT_PTR)IDC_FILES, GetModuleHandleW(NULL), NULL);
     ListView_SetExtendedListViewStyle(g.list, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
-    ListView_SetBkColor(g.list, kPanel);
-    ListView_SetTextBkColor(g.list, kPanel);
-    ListView_SetTextColor(g.list, kText);
+    ThemeList();
     SendMessageW(g.list, WM_SETFONT, (WPARAM)g_fonts.body, FALSE);
     // A 1px-wide image list is the XP-compatible way to set report row height.
     g.rowHeight = ImageList_Create(1, S(30), ILC_COLOR32, 1, 0);
@@ -1916,9 +1942,47 @@ static void CreateControls()
     col.fmt = LVCFMT_LEFT;
     col.cx = S(260);
     ListView_InsertColumn(g.list, 0, &col);
-    ApplyDarkControl(g.list, L"DarkMode_Explorer");
 
     g.workDirButton = CreateThemedButton(g.hwnd, IDC_WORK_DIR, L"CHANGE", BUTTON_LINK, kPanel);
+    g.themeButton = CreateThemedButton(g.hwnd, IDC_THEME, L"", BUTTON_LINK, kPage);
+    UpdateThemeButton();
+}
+
+// Applies the current theme to the main window: the colours are read at
+// paint time, so only the list, the frame and the theme link need telling.
+static void ApplyThemeToWindow()
+{
+    ThemeList();
+    ApplyThemedFrame(g.hwnd);
+    UpdateThemeButton();
+    LayoutChildren();
+    // Windows 10 repaints the title bar's dark/light mode only on a frame change.
+    SetWindowPos(g.hwnd, NULL, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    RedrawWindow(g.hwnd, NULL, NULL, RDW_INVALIDATE | RDW_FRAME | RDW_ALLCHILDREN);
+}
+
+// A menu of the themes under the footer link; the choice applies at once.
+static void ChooseTheme()
+{
+    HMENU menu = CreatePopupMenu();
+    for (int i = 0; i < THEME_COUNT; ++i) {
+        WString label = ThemeName(i);
+        if (i == THEME_DAKOTA_BLACK)
+            label += L" (default)";
+        AppendMenuW(menu, MF_STRING, 1 + i, label.c_str());
+    }
+    CheckMenuRadioItem(menu, 1, THEME_COUNT, 1 + CurrentTheme(), MF_BYCOMMAND);
+    RECT r;
+    GetWindowRect(g.themeButton, &r);
+    int choice = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTALIGN | TPM_BOTTOMALIGN | TPM_NONOTIFY, r.right,
+                                r.top, 0, g.hwnd, NULL);
+    DestroyMenu(menu);
+    if (choice < 1 || choice - 1 == CurrentTheme())
+        return;
+    SetTheme(choice - 1);
+    WriteSetting(L"Theme", ThemeName(choice - 1));
+    ApplyThemeToWindow();
 }
 
 static void ClientToWindowSize(int cw, int ch, int* w, int* h)
@@ -2013,6 +2077,9 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         case IDC_SHOW_BACKUP:
             ShowInExplorer(g.lastBackup);
             return 0;
+        case IDC_THEME:
+            ChooseTheme();
+            return 0;
         case IDC_BACKUP_DIR:
             ChooseBackupDir();
             return 0;
@@ -2082,6 +2149,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
     OleInitialize(NULL);  // SHBrowseForFolder with BIF_NEWDIALOGSTYLE needs OLE
     InitSettings();
     InitTheme();
+    SetTheme(ThemeFromName(ReadSetting(L"Theme").c_str()));
 
     WNDCLASSEXW wc = {};
     wc.cbSize = sizeof(wc);
@@ -2114,7 +2182,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
                                 CW_USEDEFAULT, CW_USEDEFAULT, w, h, NULL, NULL, hInstance, NULL);
     if (!hwnd)
         return 1;
-    ApplyDarkFrame(hwnd);
+    ApplyThemedFrame(hwnd);
     UpdateBackupControls();
     Refresh(true);
     SetTimer(hwnd, TIMER_POLL, kPollMs, NULL);

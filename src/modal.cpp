@@ -1,4 +1,4 @@
-// Dark modal popups. See modal.h.
+// Themed modal popups. See modal.h.
 
 #include <windows.h>
 
@@ -46,7 +46,7 @@ HWND CreateModal(HWND owner, const wchar_t* className, WNDPROC proc, const wchar
     HWND dialog = CreateWindowExW(WS_EX_DLGMODALFRAME, className, title, style, x, y, w, h, owner, NULL,
                                   inst, param);
     if (dialog)
-        ApplyDarkFrame(dialog);
+        ApplyThemedFrame(dialog);
     return dialog;
 }
 
