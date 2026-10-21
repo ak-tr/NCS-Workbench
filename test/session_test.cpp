@@ -10,6 +10,8 @@
 #include "../src/session.h"
 #include "../src/util.h"
 
+#include "testfiles.h"
+
 static const char kTrc[] = "SZL\r\n\twert_07\r\nC0A_V_EINHEIT\r\n\twert_01\r\nC0A_HSA\r\n\twert_01\r\n"
                            "C0A_DF_DIR\r\n\twert_00\r\n\twert_02\r\n";
 // A partial MAN, as NCS Dummy may export it: only the changed functions.
@@ -26,46 +28,6 @@ static DWORD g_now = 1000;  // fake tick count for PollSession
 struct Env {
     WString root, work, backup, sessions;
 };
-
-static void WriteText(const WString& path, const char* text, size_t size = (size_t)-1)
-{
-    if (size == (size_t)-1)
-        size = strlen(text);
-    HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    assert(h != INVALID_HANDLE_VALUE);
-    DWORD written;
-    WriteFile(h, text, (DWORD)size, &written, NULL);
-    CloseHandle(h);
-}
-
-static String ReadText(const WString& path)
-{
-    String s;
-    bool ok = ReadFileBytes(path, &s);
-    assert(ok);
-    return s;
-}
-
-static void RemoveTree(const WString& dir)
-{
-    WIN32_FIND_DATAW fd;
-    HANDLE h = FindFirstFileW(JoinPath(dir, L"*").c_str(), &fd);
-    if (h != INVALID_HANDLE_VALUE) {
-        do {
-            if (fd.cFileName[0] == L'.')
-                continue;
-            WString path = JoinPath(dir, fd.cFileName);
-            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-                RemoveTree(path);
-            } else {
-                SetFileAttributesW(path.c_str(), FILE_ATTRIBUTE_NORMAL);  // snapshots are read-only
-                DeleteFileW(path.c_str());
-            }
-        } while (FindNextFileW(h, &fd));
-        FindClose(h);
-    }
-    RemoveDirectoryW(dir.c_str());
-}
 
 static Env MakeEnv(const wchar_t* tag)
 {

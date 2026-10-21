@@ -9,76 +9,13 @@
 
 #include "../src/ncsdata.h"
 
-typedef std::vector<unsigned char> Bytes;
-
-static void Record(Bytes& out, unsigned type, const Bytes& payload)
-{
-    out.push_back((unsigned char)payload.size());
-    out.push_back((unsigned char)(type & 0xFF));
-    out.push_back((unsigned char)(type >> 8));
-    out.insert(out.end(), payload.begin(), payload.end());
-    out.push_back(0x5A);  // check byte, ignored
-}
-
-static void Put(Bytes& b, const char* s)
-{
-    b.insert(b.end(), s, s + strlen(s) + 1);
-}
-
-static void PutWord(Bytes& b, unsigned w)
-{
-    b.push_back((unsigned char)(w & 0xFF));
-    b.push_back((unsigned char)(w >> 8));
-}
-
-// Header defining one table: id, name, format, field names.
-static void Table(Bytes& out, unsigned id, const char* name, const char* format, const char* fields)
-{
-    Bytes p;
-    PutWord(p, id);
-    Put(p, name);
-    Record(out, 0x0300, p);
-    p.clear();
-    Put(p, format);
-    Record(out, 0x0400, p);
-    p.clear();
-    Put(p, fields);
-    Record(out, 0x0500, p);
-}
-
-static void EndHeader(Bytes& out)
-{
-    Record(out, 0xFF00, Bytes());
-}
+#include "ncsfiles.h"
 
 static Bytes KeywordFile()
 {
-    Bytes f;
-    Table(f, 0, "DATEINAME", "S", "NAME");
-    Table(f, 1, "SWT_EINTRAG", "WS", "KEYID,KEYWORD");
-    EndHeader(f);
     const char* names[] = { "SZL", "C0A_V_EINHEIT", "C0A_SETZ_V_MAX", "KOMBI_X" };
     unsigned ids[] = { 0x14D8, 0x144C, 0x1440, 0x0200 };
-    for (int i = 0; i < 4; ++i) {
-        Bytes p;
-        PutWord(p, ids[i]);
-        Put(p, names[i]);
-        Record(f, 1, p);
-    }
-    f.push_back(0);  // trailing bytes are ignored
-    return f;
-}
-
-// PARZUWEISUNG_FSW record: {L} count + longs, L, W, then the function id.
-static Bytes FswRecord(unsigned id, int longs)
-{
-    Bytes p;
-    p.push_back((unsigned char)longs);
-    for (int i = 0; i < longs * 4 + 4 + 2; ++i)
-        p.push_back(0);
-    PutWord(p, id);
-    p.push_back(0x01);  // INDEX etc.
-    return p;
+    return KeywordFile(names, ids, 4);
 }
 
 static Bytes ModuleFile(const unsigned* ids, int count)
@@ -178,6 +115,88 @@ static void TestDetection()
     assert(PickModule(std::vector<int>(), 3) == -1);
 }
 
+static void TestModuleCoding()
+{
+    unsigned a[] = { 0x19, 0x66 }, b[] = { 0x07 };
+    unsigned repeat[] = { 0x66, 0x08 };
+    ModuleBuilder m(0x0A);
+    m.Function(0x03C9, a, 2, true)  // a PSW2 record between values keeps the run going
+        .Function(0x1416, b, 1)
+        .Direct(0x2000)
+        .Function(0x03C9, repeat, 2);  // listed again: merged, values unique
+    ModuleCoding c = ParseModuleCoding(&m.f[0], m.f.size());
+    assert(c.status == MODULE_OK);
+    assert(c.codingIndex == 0x0A);
+    assert(c.functions.size() == 3);
+    assert(c.functions[0].id == 0x03C9 && !c.functions[0].direct);
+    assert(c.functions[0].values.size() == 3 && c.functions[0].values[0] == 0x19 && c.functions[0].values[1] == 0x66 &&
+           c.functions[0].values[2] == 0x08);
+    assert(c.functions[1].id == 0x1416 && c.functions[1].values.size() == 1);
+    assert(c.functions[2].id == 0x2000 && c.functions[2].direct && c.functions[2].values.empty());
+
+    // Detection keeps using the value-list functions only.
+    std::vector<unsigned> ids = ParseModuleFunctions(&m.f[0], m.f.size());
+    assert(ids.size() == 2 && ids[0] == 0x03C9 && ids[1] == 0x1416);
+
+    // Without SGID_CODIERINDEX the index is unknown here (the caller falls back to the name).
+    ModuleBuilder noIndex(-1);
+    noIndex.Function(0x0001, b, 1);
+    assert(ParseModuleCoding(&noIndex.f[0], noIndex.f.size()).codingIndex == -1);
+
+    // Not module files.
+    Bytes keywords = KeywordFile();
+    assert(ParseModuleCoding(&keywords[0], keywords.size()).status == MODULE_NO_FUNCTIONS);
+    const unsigned char junk[] = { 'h', 'e', 'l', 'l', 'o', ' ', 'w', 'o', 'r', 'l', 'd' };
+    assert(ParseModuleCoding(junk, sizeof(junk)).status == MODULE_NOT_NCS);
+    assert(ParseModuleCoding(junk, 0).status == MODULE_NOT_NCS);
+    Bytes odd;
+    Table(odd, 18, "PARZUWEISUNG_FSW", "WW", "A,B");  // a format this parser doesn't know
+    EndHeader(odd);
+    assert(ParseModuleCoding(&odd[0], odd.size()).status == MODULE_UNSUPPORTED);
+
+    // A file cut short keeps the records before the cut.
+    Bytes cut(m.f.begin(), m.f.begin() + (m.f.size() - 30));
+    ModuleCoding partial = ParseModuleCoding(&cut[0], cut.size());
+    assert(partial.status == MODULE_OK && !partial.functions.empty());
+}
+
+static void TestFamilies()
+{
+    Bytes f;
+    Table(f, 2, "SGAUSWAHL_VM", "SSSSA{B}{", "SGNAME,CBD,UMRSG,VMG,AUFTRAGSAUSDRUCK,INDEX");
+    Table(f, 3, "SGAUSWAHL_SGBD", "SSSSSA{B}{", "SGNAME,CBD,CABD,SGBD,UMRSG,AUFTRAGSAUSDRUCK,INDEX");
+    EndHeader(f);
+    Bytes p;
+    Put(p, "MK60_87");
+    Put(p, "C0A");
+    Put(p, "A_E65");
+    Put(p, "DSC_87");
+    Put(p, "DSC");
+    p.push_back(0x04);  // the AUFTRAGSAUSDRUCK expression, not read
+    Record(f, 3, p);
+    p.clear();
+    Put(p, "kmbi_pl2");
+    Put(p, "c05");
+    Put(p, "KOMBI");
+    Put(p, "VM");
+    Record(f, 2, p);
+    std::map<String, String> m = ParseModuleFamilies(&f[0], f.size());
+    assert(m.size() == 2);
+    assert(m["MK60_87.C0A"] == "DSC");
+    assert(m["KMBI_PL2.C05"] == "KOMBI");  // keys are upper case
+    Bytes none = KeywordFile();
+    assert(ParseModuleFamilies(&none[0], none.size()).empty());
+}
+
+static void TestInvertKeywords()
+{
+    std::map<String, unsigned> k;
+    k["AKTIV"] = 1;
+    k["NICHT_AKTIV"] = 2;
+    std::map<unsigned, String> inv = InvertKeywords(k);
+    assert(inv.size() == 2 && inv[1] == "AKTIV" && inv[2] == "NICHT_AKTIV");
+}
+
 int main()
 {
     TestRecords();
@@ -185,6 +204,9 @@ int main()
     TestModuleFunctions();
     TestChassisMap();
     TestDetection();
+    TestModuleCoding();
+    TestFamilies();
+    TestInvertKeywords();
     printf("ncsdata_test: all passed\n");
     return 0;
 }

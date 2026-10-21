@@ -10,8 +10,12 @@ where %CXX% >nul 2>nul || (echo %CXX% not found. & exit /b 1)
 if not exist build mkdir build
 call :run trace_test || exit /b 1
 call :run ncsdata_test || exit /b 1
+call :run translations_test || exit /b 1
+call :run paramindex_test || exit /b 1
 call :run util_test src\util.cpp -lshell32 -lole32 -ladvapi32 || exit /b 1
 call :run session_test src\session.cpp src\util.cpp -lshell32 -lole32 -ladvapi32 || exit /b 1
+call :run translator_test src\translator.cpp src\util.cpp -lshell32 -lole32 -ladvapi32 || exit /b 1
+call :run daten_test src\daten.cpp src\util.cpp -lshell32 -lole32 -ladvapi32 || exit /b 1
 exit /b 0
 
 :run

@@ -8,6 +8,7 @@
 #include "compare.h"
 #include "modal.h"
 #include "theme.h"
+#include "transdlg.h"
 #include "util.h"
 
 static const wchar_t kDialogClass[] = L"NcsWorkbenchCompare";
@@ -195,22 +196,20 @@ static LRESULT RowCustomDraw(CompareDialog* d, NMLVCUSTOMDRAW* cd)
         bool same = row.status == DIFF_SAME;
         RECT c = { rc.left + S(16), rc.top, trcLeft - S(12), rc.bottom };
         // Mono: in Onest the zero of names like C0A reads as an O.
-        DrawLabel(dc, g_fonts.mono, same ? kSecondary : kWhite, Widen(row.name).c_str(), c, DT_LEFT | DT_VCENTER);
+        DrawKeyword(dc, row.name, c, same ? kSecondary : kWhite);
 
         c = { trcLeft, rc.top, manLeft - S(12), rc.bottom };
         if (row.status == DIFF_ONLY_MAN)
             DrawLabel(dc, g_fonts.label, kWarn, L"NOT IN TRC", c, DT_LEFT | DT_VCENTER, Tracking());
         else
-            DrawLabel(dc, g_fonts.mono, same ? kMuted : kText, Widen(JoinValues(row.trc)).c_str(), c,
-                      DT_LEFT | DT_VCENTER);
+            DrawValues(dc, row.trc, c, same ? kMuted : kText);
 
         c = { manLeft, rc.top, rc.right - S(12), rc.bottom };
         if (row.status == DIFF_ONLY_TRC)
             DrawLabel(dc, g_fonts.label, flagOnlyTrc ? kWarn : kFaint, L"NOT IN MAN", c, DT_LEFT | DT_VCENTER,
                       Tracking());
         else
-            DrawLabel(dc, g_fonts.mono, row.status == DIFF_CHANGED ? kAccent : same ? kMuted : kText,
-                      Widen(JoinValues(row.man)).c_str(), c, DT_LEFT | DT_VCENTER);
+            DrawValues(dc, row.man, c, row.status == DIFF_CHANGED ? kAccent : same ? kMuted : kText);
 
         if ((state & LVIS_FOCUSED) && GetFocus() == d->list)
             Frame(dc, rc, kAccent);
@@ -229,20 +228,8 @@ static void CreateDialogControls(CompareDialog* d)
     d->close = CreateThemedButton(d->hwnd, IDCANCEL, L"CLOSE", BUTTON_SECONDARY, kPage);
 
     // Virtual list: rows come from d->visible, drawn in RowCustomDraw.
-    d->list = CreateWindowExW(0, WC_LISTVIEWW, L"",
-                              WS_CHILD | WS_TABSTOP | LVS_REPORT | LVS_NOCOLUMNHEADER | LVS_SINGLESEL |
-                                  LVS_SHOWSELALWAYS | LVS_OWNERDATA,
-                              0, 0, 0, 0, d->hwnd, (HMENU)(INT_PTR)IDC_ROWS, GetModuleHandleW(NULL), NULL);
-    ListView_SetExtendedListViewStyle(d->list, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
-    ListView_SetBkColor(d->list, kTile3);
-    SendMessageW(d->list, WM_SETFONT, (WPARAM)g_fonts.body, FALSE);
-    d->rowHeight = ImageList_Create(1, S(32), ILC_COLOR32, 1, 0);  // sets report row height (XP-safe)
-    ListView_SetImageList(d->list, d->rowHeight, LVSIL_SMALL);
-    LVCOLUMNW col = {};
-    col.mask = LVCF_WIDTH;
-    col.cx = S(600);
-    ListView_InsertColumn(d->list, 0, &col);
-    ApplyThemedControl(d->list, L"DarkMode_Explorer");
+    // Two-line rows while translations show.
+    d->list = CreateThemedList(d->hwnd, IDC_ROWS, kTile3, KeywordRowHeight(32), &d->rowHeight);
 
     LayoutDialog(d);
     ApplyFilter(d);
@@ -295,10 +282,10 @@ static LRESULT CALLBACK DialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             LVITEMW& item = ((NMLVDISPINFOW*)lParam)->item;
             if ((item.mask & LVIF_TEXT) && item.iItem >= 0 && (size_t)item.iItem < d->visible.size()) {
                 const DiffRow& row = d->rows[d->visible[item.iItem]];
-                WString text = Widen(row.name) + L": TRC " +
-                               (row.status == DIFF_ONLY_MAN ? WString(L"not present") : Widen(JoinValues(row.trc))) +
+                WString text = SpokenKeyword(row.name) + L": TRC " +
+                               (row.status == DIFF_ONLY_MAN ? WString(L"not present") : SpokenValues(row.trc)) +
                                L", MAN " +
-                               (row.status == DIFF_ONLY_TRC ? WString(L"not present") : Widen(JoinValues(row.man)));
+                               (row.status == DIFF_ONLY_TRC ? WString(L"not present") : SpokenValues(row.man));
                 lstrcpynW(item.pszText, text.c_str(), item.cchTextMax);
             }
         }
