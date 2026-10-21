@@ -303,6 +303,62 @@ WString FormatShortStamp(const FILETIME& ft)
     return buf;
 }
 
+static const ULONGLONG kTicksPerMinute = 10000000ULL * 60;
+static const ULONGLONG kRecentMinutes = 6 * 60;
+
+static ULONGLONG Ticks(const FILETIME& ft)
+{
+    return ((ULONGLONG)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+}
+
+static ULONGLONG NowTicks()
+{
+    FILETIME now;
+    GetSystemTimeAsFileTime(&now);
+    return Ticks(now);
+}
+
+WString FormatAge(const FILETIME& ft, bool brief)
+{
+    ULONGLONG a = Ticks(ft), b = NowTicks();
+    ULONGLONG minutes = b > a ? (b - a) / kTicksPerMinute : 0;
+    wchar_t buf[48];
+    if (minutes < 1)
+        lstrcpyW(buf, L"JUST NOW");
+    else if (minutes < 60)
+        wsprintfW(buf, L"%u MIN AGO", (unsigned)minutes);
+    else if (minutes < 48 * 60 && brief)
+        wsprintfW(buf, L"%u H AGO", (unsigned)(minutes / 60));
+    else if (minutes < 48 * 60)
+        wsprintfW(buf, L"%u H %u MIN AGO", (unsigned)(minutes / 60), (unsigned)(minutes % 60));
+    else
+        wsprintfW(buf, L"%u DAYS AGO", (unsigned)(minutes / (24 * 60)));
+    return buf;
+}
+
+bool IsRecent(const FILETIME& ft)
+{
+    ULONGLONG a = Ticks(ft), b = NowTicks();
+    if (a > b)
+        return a - b < kTicksPerMinute;  // a little clock skew reads as JUST NOW; more keeps the date
+    return (b - a) / kTicksPerMinute <= kRecentMinutes;
+}
+
+WString FormatShortAge(const FILETIME& ft, bool brief)
+{
+    return IsRecent(ft) ? FormatAge(ft, brief) : FormatShortStamp(ft);
+}
+
+// The offset in force on that date, not today's: a summer time read in winter stays right.
+FILETIME LocalToFileTime(const SYSTEMTIME& t)
+{
+    SYSTEMTIME utc;
+    FILETIME ft = {};
+    if (TzSpecificLocalTimeToSystemTime(NULL, &t, &utc))
+        SystemTimeToFileTime(&utc, &ft);
+    return ft;
+}
+
 WString FormatFileStamp(const SYSTEMTIME& t)
 {
     wchar_t buf[32];

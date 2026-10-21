@@ -136,6 +136,14 @@ WString FormatDay(const SYSTEMTIME& t)
     return buf;
 }
 
+WString FormatDayAge(const SYSTEMTIME& t)
+{
+    if (!HasTime(t))
+        return WString();
+    FILETIME ft = LocalToFileTime(t);
+    return IsRecent(ft) ? FormatAge(ft) : FormatDay(t);
+}
+
 static WString FormatIsoTime(const SYSTEMTIME& t)
 {
     if (!HasTime(t))

@@ -118,7 +118,8 @@ struct App {
     WString workDir, backupDir, lastBackup, dummyPath;
     bool backupJustNow = false;  // a backup was made in this run
     bool backupWasMan = false;   // ...by Empty MAN rather than Back up TRC
-    SYSTEMTIME backupTime = {};
+    FILETIME backupTime = {};
+    WString ages;  // the ages last painted (RepaintAges)
 
     std::vector<FileEntry> files;
     FolderState folderState = FOLDER_MISSING;
@@ -977,25 +978,38 @@ static void LayoutChildren()
 // ---------------------------------------------------------------------------
 // Painting: idle
 
-static WString ToolMeta(int tool, COLORREF* color)
+// SAVED 3 MIN AGO after a backup; a narrow tile gets SAVED 1 H AGO, then SAVED.
+static WString FitBackupMeta(HDC dc, const wchar_t* verb, int width)
+{
+    WString text;
+    for (int fit = 0; fit < 3; ++fit) {
+        text = fit < 2 ? verb + (L" " + FormatShortAge(g.backupTime, fit > 0)) : WString(verb);
+        if (MeasureLabel(dc, g_fonts.label, text.c_str(), Tracking()) <= width)
+            break;
+    }
+    return text;
+}
+
+// The tile's status line, fitted to width.
+static WString ToolMeta(HDC dc, int width, int tool, COLORREF* color)
 {
     *color = kMuted;
     if (tool == 0) {
         if (g.backupJustNow && !g.backupWasMan) {
             *color = kGood;
-            return L"SAVED " + FormatClock(g.backupTime);
+            return FitBackupMeta(dc, L"SAVED", width);
         }
         const FileEntry* trc = FindFile(kTrcName);
         if (!trc) {
             *color = kWarn;
             return g.folderState == FOLDER_OK ? L"NOT IN WORK" : L"NO WORK FOLDER";
         }
-        return FormatThousands(trc->size) + L" B / " + FormatShortStamp(trc->modified);
+        return FitFileMeta(dc, true, trc->size, trc->modified, width);
     }
     if (tool == 1) {
         if (g.backupJustNow && g.backupWasMan) {
             *color = kGood;
-            return L"EMPTIED " + FormatClock(g.backupTime);
+            return FitBackupMeta(dc, L"EMPTIED", width);
         }
         const FileEntry* man = FindFile(kManName);
         if (!man)
@@ -1004,7 +1018,7 @@ static WString ToolMeta(int tool, COLORREF* color)
             *color = kGood;
             return L"EMPTY";
         }
-        return FormatThousands(man->size) + L" B / " + FormatShortStamp(man->modified);
+        return FitFileMeta(dc, true, man->size, man->modified, width);
     }
     if (!g.canCompare)
         return L"AFTER AN EDIT";
@@ -1076,8 +1090,8 @@ static void PaintIdle(HDC dc)
         r = { tile.left + S(16), tile.top + S(14), tile.right - S(12), tile.top + S(34) };
         DrawLabel(dc, g_fonts.body, kWhite, kToolTitles[i], r, DT_LEFT | DT_VCENTER);
         COLORREF color;
-        WString meta = ToolMeta(i, &color);
         r = { tile.left + S(16), tile.top + S(38), tile.right - S(12), tile.top + S(54) };
+        WString meta = ToolMeta(dc, r.right - r.left, i, &color);
         DrawLabel(dc, g_fonts.label, color, meta.c_str(), r, DT_LEFT | DT_VCENTER, Tracking());
     }
 
@@ -1099,7 +1113,7 @@ static void PaintIdle(HDC dc)
         Fill(dc, rule, kRule);
         int resultWidth = S(l.compact ? 110 : 140);
         RECT c = { l.left, y, l.left + S(110), y + S(34) };
-        DrawLabel(dc, g_fonts.label, kMuted, FormatDay(s.started).c_str(), c, DT_LEFT | DT_VCENTER, Tracking());
+        DrawLabel(dc, g_fonts.label, kMuted, FormatDayAge(s.started).c_str(), c, DT_LEFT | DT_VCENTER, Tracking());
         c = { l.right - resultWidth, y, l.right, y + S(34) };
         DrawLabel(dc, g_fonts.label, SessionResultColor(s), SessionResultText(s).c_str(), c, DT_RIGHT | DT_VCENTER,
                   Tracking());
@@ -1587,17 +1601,15 @@ static void PaintSession(HDC dc)
 // ---------------------------------------------------------------------------
 // Painting: step 01 before the session starts
 
-// FSW_PSW.TRC / 2,167 B / 17:41 on the left, what happens to it on the right.
+// FSW_PSW.TRC / 2,167 B / 3 MIN AGO on the left, what happens to it on the right.
 static void PaintPreviewFile(HDC dc, const RECT& row, const wchar_t* name, const wchar_t* action)
 {
     const FileEntry* f = FindFile(name);
-    WString meta = !f ? WString(L"NOT IN WORK")
-                      : f->size == 0 ? L"EMPTY / " + FormatShortStamp(f->modified)
-                                     : FormatThousands(f->size) + L" B / " + FormatShortStamp(f->modified);
     int split = PreviewSplit(row);
     RECT r = { row.left, row.top + S(8), split - S(12), row.top + S(26) };
     DrawLabel(dc, g_fonts.mono, kWhite, name, r, DT_LEFT | DT_VCENTER);
     r = { row.left, row.top + S(28), split - S(12), row.top + S(44) };
+    WString meta = f ? FitFileMeta(dc, true, f->size, f->modified, r.right - r.left) : WString(L"NOT IN WORK");
     DrawLabel(dc, g_fonts.label, kFaint, meta.c_str(), r, DT_LEFT | DT_VCENTER, Tracking());
     r = { split, row.top + S(8), row.right, row.bottom - S(4) };
     DrawLabel(dc, g_fonts.body, kSecondary, action, r, DT_LEFT | DT_TOP | DT_WORDBREAK);
@@ -1782,9 +1794,17 @@ static LRESULT ListCustomDraw(NMLVCUSTOMDRAW* cd)
         RECT rc;
         ListView_GetItemRect(g.list, item, &rc, LVIR_BOUNDS);
         Fill(dc, rc, selected ? kSelect : kPanel);
-        // Size/time takes what it needs; the name gets the rest (narrow windows).
-        WString text = FormatShortSize(f->size) + L"  " + FormatShortStamp(f->modified);
+        // Size/time takes what it needs; the name gets the rest (narrow windows). If that
+        // cuts the name, the age drops its minutes (1 H AGO), then the size goes.
+        WString text = FormatShortSize(f->size) + L"  " + FormatShortAge(f->modified);
         int infoWidth = MeasureLabel(dc, g_fonts.label, text.c_str(), Tracking()) + Tracking();
+        int nameWidth = MeasureLabel(dc, g_fonts.body, f->name.c_str());
+        for (int fit = 1; fit <= 2 && rc.right - rc.left - S(32) - infoWidth < nameWidth; ++fit) {
+            text = FormatShortAge(f->modified, true);
+            if (fit == 1)
+                text = FormatShortSize(f->size) + L"  " + text;
+            infoWidth = MeasureLabel(dc, g_fonts.label, text.c_str(), Tracking()) + Tracking();
+        }
         RECT info = { rc.right - S(12) - infoWidth, rc.top, rc.right - S(12), rc.bottom };
         RECT name = { rc.left + S(8), rc.top, info.left - S(12), rc.bottom };
         COLORREF nameColor = selected || IsKeyFile(f->name) ? kWhite : kSecondary;
@@ -2005,13 +2025,8 @@ static ConfirmRow WorkRow(const wchar_t* name, const wchar_t* action, const wcha
 {
     ConfirmRow row;
     row.name = name;
-    ULONGLONG size;
-    FILETIME modified;
-    bool exists = ProbeFile(JoinPath(g.session.workDir, name), &size, &modified);
-    row.meta = !exists ? WString(L"NOT IN WORK")
-                       : size == 0 ? L"EMPTY / " + FormatShortStamp(modified)
-                                   : FormatThousands(size) + L" B / " + FormatShortStamp(modified);
-    row.action = exists && size > 0 ? action : missing;
+    row.exists = ProbeFile(JoinPath(g.session.workDir, name), &row.size, &row.modified);
+    row.action = row.exists && row.size > 0 ? action : missing;
     return row;
 }
 
@@ -2298,6 +2313,23 @@ static void Refresh(bool force)
     SessionTick();
 }
 
+// "3 MIN AGO" goes stale without any file changing: repaint when an age on screen would read differently.
+static void RepaintAges()
+{
+    WString ages = TraceAgeText(false);
+    for (size_t i = 0; i < g.files.size(); ++i)
+        ages += L"/" + FormatShortAge(g.files[i].modified);
+    if (g.backupJustNow)
+        ages += L"/" + FormatShortAge(g.backupTime);
+    for (size_t i = 0; i < g.recent.size(); ++i)
+        ages += L"/" + FormatDayAge(g.recent[i].started);
+    if (ages == g.ages)
+        return;
+    g.ages = ages;
+    InvalidateRect(g.hwnd, NULL, FALSE);
+    InvalidateRect(g.list, NULL, FALSE);
+}
+
 static void UpdateBackupControls()
 {
     SetWindowTextW(g.backupDirButton, g.backupDir.empty() ? L"CHOOSE" : L"CHANGE");
@@ -2332,7 +2364,7 @@ static void RecordBackup(const WString& path, bool fromEmptyMan)
     g.lastBackup = path;
     g.backupJustNow = true;
     g.backupWasMan = fromEmptyMan;
-    GetLocalTime(&g.backupTime);
+    GetSystemTimeAsFileTime(&g.backupTime);
     WriteSetting(L"LastBackup", path);
 }
 
@@ -2668,6 +2700,8 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             g.refreshPending = false;
         }
         Refresh(false);
+        if (wParam == TIMER_POLL)
+            RepaintAges();
         return 0;
 
     case WM_DESTROY:

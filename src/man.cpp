@@ -71,7 +71,8 @@ static void PaintDialog(HDC dc, const RECT& client)
     ULONGLONG size;
     FILETIME modified;
     if (ReadFileInfo(d->man, &size, &modified)) {
-        WString info = L"FSW_PSW.MAN / " + FormatThousands(size) + L" B / " + FormatStamp(modified);
+        WString info = L"FSW_PSW.MAN / " + FormatThousands(size) + L" B / " +
+                       (IsRecent(modified) ? FormatAge(modified) : FormatStamp(modified));
         DrawLabel(dc, g_fonts.mono, kWhite, info.c_str(), r, DT_LEFT | DT_VCENTER);
     } else {
         DrawLabel(dc, g_fonts.label, kWarn, L"FSW_PSW.MAN NOT FOUND", r, DT_LEFT | DT_VCENTER, Tracking());
