@@ -1,6 +1,6 @@
 # Main window and tools
 
-A tour of NCS Workbench's main window and the three manual tools: back up the TRC, empty the MAN, compare. For the guided workflow, see [Guided coding sessions](guided-sessions.md).
+A tour of NCS Workbench's main window and the three manual tools: back up the TRC, empty the MAN, compare. For the guided workflows, see [Guided coding sessions](guided-sessions.md) and [VO coding sessions](vo-sessions.md).
 
 The screenshots were taken on a test setup: the sample trace from `samples/`, a made-up SP-Daten folder and `C:\TRC BACKUPS` as the backup folder.
 
