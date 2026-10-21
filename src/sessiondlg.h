@@ -1,5 +1,6 @@
-// Session dialogs: start (prepare WORK), unfinished session on startup,
-// finish, and plain confirmations/messages. All modal, Mosaic-styled.
+// Session dialogs: unfinished session on startup, finish, and plain
+// confirmations/messages. All modal, Mosaic-styled. (Step 01 is drawn in the
+// main window, main.cpp.)
 
 #pragma once
 
@@ -13,11 +14,8 @@
 
 // Stage titles, 1-7: "Prepare WORK", "Read the ECU", ...
 const wchar_t* StageTitle(int stage);
-
-// Lists what happens to FSW_PSW.TRC and FSW_PSW.MAN before anything does.
-// True to start; *reuseTrc: use the TRC in WORK as the first read. The
-// backup folder can be changed here (saved to the settings).
-bool RunPrepareDialog(HWND owner, const WString& workDir, WString& backupDir, bool* reuseTrc);
+// By type: MAN as above, VO 1-5 ("Prepare WORK", "Read the ECU", "Code from the VO", ...).
+const wchar_t* StageTitle(SessionType type, int stage);
 
 enum RecoverChoice { RECOVER_RESUME, RECOVER_CANCEL };
 // An unfinished session found at startup. Changes nothing itself.
@@ -46,11 +44,13 @@ void RunMessageDialog(HWND owner, const WString& caption, const WString& label, 
 // "3 H 12 MIN AGO" for a file time.
 WString FormatAge(const FILETIME& ft);
 
-// History labels: VERIFIED / DISCREPANCIES / ... or IN PROGRESS, and their colour.
+// History labels: VERIFIED / DISCREPANCIES / READ BACK / ... or IN PROGRESS, and their colour.
 WString SessionResultText(const Session& s);
 COLORREF SessionResultColor(const Session& s);
 // "E89 / MK60_87.C0A", or "ECU NOT CONFIRMED".
 WString SessionEcuText(const Session& s);
+// The same, with " / VO" for VO sessions (where there's room: history, recovery).
+WString SessionTitleText(const Session& s);
 
 // Opens a session file in Notepad (TRC and MAN files have no association).
 void OpenInNotepad(const WString& path);

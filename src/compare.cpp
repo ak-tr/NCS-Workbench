@@ -24,6 +24,7 @@ struct CompareDialog {
     DiffSummary summary;
     bool loaded;
     bool showAll;
+    bool beforeAfter;
     bool done;
 };
 
@@ -112,20 +113,28 @@ static void PaintDialog(HDC dc, const RECT& client)
     Rects r = ComputeRects(client.right, client.bottom);
     Fill(dc, client, kPage);
 
+    bool ba = d->beforeAfter;
     RECT t = { pad, S(24), r.toggle.left - S(16), S(40) };
-    DrawLabel(dc, g_fonts.label, kFaint, L"03 / COMPARE", t, DT_LEFT | DT_VCENTER, Tracking());
+    DrawLabel(dc, g_fonts.label, kFaint, ba ? L"05 / WHAT CHANGED" : L"03 / COMPARE", t, DT_LEFT | DT_VCENTER,
+              Tracking());
     t = { pad, S(44), r.toggle.left - S(16), S(74) };
-    DrawLabel(dc, g_fonts.heading, kWhite, L"FSW_PSW.TRC vs FSW_PSW.MAN", t, DT_LEFT | DT_VCENTER);
+    DrawLabel(dc, g_fonts.heading, kWhite, ba ? L"First read vs read-back" : L"FSW_PSW.TRC vs FSW_PSW.MAN", t,
+              DT_LEFT | DT_VCENTER);
 
     t = { pad, S(84), w - pad, S(100) };
     if (!d->loaded) {
-        DrawLabel(dc, g_fonts.label, kWarn, L"COULDN'T READ FSW_PSW.TRC OR FSW_PSW.MAN", t, DT_LEFT | DT_VCENTER,
-                  Tracking());
+        DrawLabel(dc, g_fonts.label, kWarn,
+                  ba ? L"COULDN'T READ THE SAVED TRACES" : L"COULDN'T READ FSW_PSW.TRC OR FSW_PSW.MAN", t,
+                  DT_LEFT | DT_VCENTER, Tracking());
     } else {
         const DiffSummary& s = d->summary;
         wchar_t text[160];
-        wsprintfW(text, L"%d CHANGED / %d ONLY IN TRC / %d ONLY IN MAN / %d SAME%s", s.changed, s.onlyTrc,
-                  s.onlyMan, s.same, s.partialMan ? L" / PARTIAL MAN" : L"");
+        if (ba)
+            wsprintfW(text, L"%d CHANGED / %d ONLY BEFORE / %d ONLY AFTER / %d SAME", s.changed, s.onlyTrc, s.onlyMan,
+                      s.same);
+        else
+            wsprintfW(text, L"%d CHANGED / %d ONLY IN TRC / %d ONLY IN MAN / %d SAME%s", s.changed, s.onlyTrc,
+                      s.onlyMan, s.same, s.partialMan ? L" / PARTIAL MAN" : L"");
         DrawLabel(dc, g_fonts.label, kMuted, text, t, DT_LEFT | DT_VCENTER, Tracking());
     }
 
@@ -142,9 +151,11 @@ static void PaintDialog(HDC dc, const RECT& client)
     RECT c = { r.header.left + S(16), r.header.top, trcLeft - S(12), r.header.bottom };
     DrawLabel(dc, g_fonts.label, kFaint, L"FUNCTION", c, DT_LEFT | DT_VCENTER, Tracking());
     c = { trcLeft, r.header.top, manLeft - S(12), r.header.bottom };
-    DrawLabel(dc, g_fonts.label, kFaint, L"TRC (READ FROM CAR)", c, DT_LEFT | DT_VCENTER, Tracking());
+    DrawLabel(dc, g_fonts.label, kFaint, ba ? L"BEFORE (FIRST READ)" : L"TRC (READ FROM CAR)", c,
+              DT_LEFT | DT_VCENTER, Tracking());
     c = { manLeft, r.header.top, r.header.right - S(12), r.header.bottom };
-    DrawLabel(dc, g_fonts.label, kFaint, L"MAN (TO CODE)", c, DT_LEFT | DT_VCENTER, Tracking());
+    DrawLabel(dc, g_fonts.label, kFaint, ba ? L"AFTER (READ-BACK)" : L"MAN (TO CODE)", c, DT_LEFT | DT_VCENTER,
+              Tracking());
 
     if (d->visible.empty()) {
         Fill(dc, r.message, kTile3);
@@ -153,9 +164,10 @@ static void PaintDialog(HDC dc, const RECT& client)
         m.left += S(16);
         m.right -= S(16);
         RECT line = { m.left, m.top, m.right, m.top + S(24) };
-        const wchar_t* headline = !d->loaded           ? L"Nothing to compare."
-                                  : d->rows.empty()     ? L"Both files are empty."
-                                                        : L"No changes. The MAN matches the TRC.";
+        const wchar_t* headline = !d->loaded       ? L"Nothing to compare."
+                                  : d->rows.empty() ? L"Both files are empty."
+                                  : ba              ? L"No changes. The read-back matches the first read."
+                                                    : L"No changes. The MAN matches the TRC.";
         DrawLabel(dc, g_fonts.title, d->loaded && !d->rows.empty() ? kGood : kWhite, headline, line,
                   DT_CENTER | DT_VCENTER);
         line = { m.left, m.top + S(32), m.right, m.top + S(48) };
@@ -200,14 +212,15 @@ static LRESULT RowCustomDraw(CompareDialog* d, NMLVCUSTOMDRAW* cd)
 
         c = { trcLeft, rc.top, manLeft - S(12), rc.bottom };
         if (row.status == DIFF_ONLY_MAN)
-            DrawLabel(dc, g_fonts.label, kWarn, L"NOT IN TRC", c, DT_LEFT | DT_VCENTER, Tracking());
+            DrawLabel(dc, g_fonts.label, kWarn, d->beforeAfter ? L"NOT BEFORE" : L"NOT IN TRC", c,
+                      DT_LEFT | DT_VCENTER, Tracking());
         else
             DrawValues(dc, row.trc, c, same ? kMuted : kText);
 
         c = { manLeft, rc.top, rc.right - S(12), rc.bottom };
         if (row.status == DIFF_ONLY_TRC)
-            DrawLabel(dc, g_fonts.label, flagOnlyTrc ? kWarn : kFaint, L"NOT IN MAN", c, DT_LEFT | DT_VCENTER,
-                      Tracking());
+            DrawLabel(dc, g_fonts.label, flagOnlyTrc ? kWarn : kFaint, d->beforeAfter ? L"NOT AFTER" : L"NOT IN MAN", c,
+                      DT_LEFT | DT_VCENTER, Tracking());
         else
             DrawValues(dc, row.man, c, row.status == DIFF_CHANGED ? kAccent : same ? kMuted : kText);
 
@@ -282,9 +295,9 @@ static LRESULT CALLBACK DialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             LVITEMW& item = ((NMLVDISPINFOW*)lParam)->item;
             if ((item.mask & LVIF_TEXT) && item.iItem >= 0 && (size_t)item.iItem < d->visible.size()) {
                 const DiffRow& row = d->rows[d->visible[item.iItem]];
-                WString text = SpokenKeyword(row.name) + L": TRC " +
+                WString text = SpokenKeyword(row.name) + (d->beforeAfter ? L": before " : L": TRC ") +
                                (row.status == DIFF_ONLY_MAN ? WString(L"not present") : SpokenValues(row.trc)) +
-                               L", MAN " +
+                               (d->beforeAfter ? L", after " : L", MAN ") +
                                (row.status == DIFF_ONLY_TRC ? WString(L"not present") : SpokenValues(row.man));
                 lstrcpynW(item.pszText, text.c_str(), item.cchTextMax);
             }
@@ -319,15 +332,20 @@ static LRESULT CALLBACK DialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
-void RunCompareDialog(HWND owner, const WString& trcPath, const WString& manPath)
+void RunCompareDialog(HWND owner, const WString& trcPath, const WString& manPath, bool beforeAfter)
 {
     CompareDialog d = {};
+    d.beforeAfter = beforeAfter;
     std::vector<TraceEntry> trc, man;
     d.loaded = LoadTrace(trcPath, &trc) && LoadTrace(manPath, &man);
     if (d.loaded)
         d.rows = DiffTrace(trc, man, &d.summary);
+    if (beforeAfter)
+        d.summary.partialMan = false;  // two full reads: a function in only one is always news
 
-    HWND hwnd = CreateModal(owner, kDialogClass, DialogProc, L"Compare TRC with MAN", S(820), S(580), &d, true);
+    HWND hwnd = CreateModal(owner, kDialogClass, DialogProc,
+                            beforeAfter ? L"Compare first read with read-back" : L"Compare TRC with MAN", S(820),
+                            S(580), &d, true);
     if (!hwnd)
         return;
     RunModal(owner, hwnd, d.visible.empty() ? d.toggle : d.list, &d.done);
