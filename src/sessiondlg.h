@@ -25,8 +25,15 @@ RecoverChoice RunRecoverDialog(HWND owner, const Session& s);
 bool RunFinishDialog(HWND owner, Session* s);
 
 struct ConfirmRow {
-    WString name, meta, action;  // FSW_PSW.TRC / 2,167 B / 11:00 / what happens to it
+    WString name, action;  // FSW_PSW.TRC / what happens to it
+    bool exists = false;   // shown as 2,167 B / 3 MIN AGO, or NOT IN WORK
+    ULONGLONG size = 0;
+    FILETIME modified = {};
 };
+
+// "2,167 B / 1 H 35 MIN AGO", "EMPTY / 3 MIN AGO" or "NOT IN WORK" for a WORK file, shortened
+// until it fits the width: 1 H AGO, then 2 KB, then the age alone.
+WString FitFileMeta(HDC dc, bool exists, ULONGLONG size, const FILETIME& modified, int width);
 
 struct ConfirmSpec {
     WString caption, label, title, body;
@@ -40,9 +47,6 @@ struct ConfirmSpec {
 bool RunConfirmDialog(HWND owner, const ConfirmSpec& spec);
 void RunMessageDialog(HWND owner, const WString& caption, const WString& label, const WString& title,
                       const WString& body);
-
-// "3 H 12 MIN AGO" for a file time.
-WString FormatAge(const FILETIME& ft);
 
 // History labels: VERIFIED / DISCREPANCIES / READ BACK / ... or IN PROGRESS, and their colour.
 WString SessionResultText(const Session& s);

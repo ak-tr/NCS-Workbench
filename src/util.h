@@ -49,4 +49,10 @@ WString FormatThousands(ULONGLONG n);  // 12,345 (user's separator)
 WString FormatShortSize(ULONGLONG n);  // 512 B, 18 KB, 1.2 MB
 WString FormatStamp(const FILETIME& ft);       // 19 OCT 10:09, or 19 OCT 2025 if not this year
 WString FormatShortStamp(const FILETIME& ft);  // 10:09 today, else 19 OCT
+// JUST NOW, 3 MIN AGO, 1 H 35 MIN AGO (brief: 1 H AGO, for tight spots), 4 DAYS AGO
+WString FormatAge(const FILETIME& ft, bool brief = false);
+// Up to 6 hours ago, an age is quicker to read than a clock time.
+bool IsRecent(const FILETIME& ft);
+WString FormatShortAge(const FILETIME& ft, bool brief = false);  // FormatAge if recent, else FormatShortStamp
+FILETIME LocalToFileTime(const SYSTEMTIME& t);  // a GetLocalTime value as a UTC file time
 WString FormatFileStamp(const SYSTEMTIME& t);  // 20261019-1009, for backup names

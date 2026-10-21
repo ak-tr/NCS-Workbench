@@ -35,25 +35,6 @@ const wchar_t* StageTitle(SessionType type, int stage)
     return stage >= 0 && stage <= 5 ? titles[stage] : L"";
 }
 
-WString FormatAge(const FILETIME& ft)
-{
-    FILETIME now;
-    GetSystemTimeAsFileTime(&now);
-    ULONGLONG a = ((ULONGLONG)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
-    ULONGLONG b = ((ULONGLONG)now.dwHighDateTime << 32) | now.dwLowDateTime;
-    ULONGLONG minutes = b > a ? (b - a) / (10000000ULL * 60) : 0;
-    wchar_t buf[48];
-    if (minutes < 1)
-        lstrcpyW(buf, L"JUST NOW");
-    else if (minutes < 60)
-        wsprintfW(buf, L"%u MIN AGO", (unsigned)minutes);
-    else if (minutes < 48 * 60)
-        wsprintfW(buf, L"%u H %u MIN AGO", (unsigned)(minutes / 60), (unsigned)(minutes % 60));
-    else
-        wsprintfW(buf, L"%u DAYS AGO", (unsigned)(minutes / (24 * 60)));
-    return buf;
-}
-
 static WString Upper(WString s)
 {
     if (!s.empty())
@@ -240,26 +221,36 @@ static int BodyHeight(const WString& text, int width)
 }
 
 // File row: name and meta on the left, what happens on the right.
-static void PaintFileRow(HDC dc, int left, int right, int top, const WString& name, const WString& meta,
-                         const WString& action, COLORREF actionColor)
+static void PaintFileRow(HDC dc, int left, int right, int top, const ConfirmRow& row, COLORREF actionColor)
 {
     RECT r = { left, top + S(12), left + S(160), top + S(30) };
-    DrawLabel(dc, g_fonts.mono, kWhite, name.c_str(), r, DT_LEFT | DT_VCENTER);
+    DrawLabel(dc, g_fonts.mono, kWhite, row.name.c_str(), r, DT_LEFT | DT_VCENTER);
     r = { left, top + S(32), left + S(160), top + S(48) };
+    WString meta = FitFileMeta(dc, row.exists, row.size, row.modified, r.right - r.left);
     DrawLabel(dc, g_fonts.label, kFaint, meta.c_str(), r, DT_LEFT | DT_VCENTER, Tracking());
     r = { left + S(176), top + S(12), right, top + S(56) };
-    DrawLabel(dc, g_fonts.body, actionColor, action.c_str(), r, DT_LEFT | DT_TOP | DT_WORDBREAK);
+    DrawLabel(dc, g_fonts.body, actionColor, row.action.c_str(), r, DT_LEFT | DT_TOP | DT_WORDBREAK);
     RECT rule = { left, top + S(60), right, top + S(61) };
     Fill(dc, rule, kRule);
 }
 
-static WString FileMeta(bool exists, ULONGLONG size, const FILETIME& modified)
+WString FitFileMeta(HDC dc, bool exists, ULONGLONG size, const FILETIME& modified, int width)
 {
     if (!exists)
         return L"NOT IN WORK";
-    if (size == 0)
-        return L"EMPTY / " + FormatShortStamp(modified);
-    return FormatThousands(size) + L" B / " + FormatShortStamp(modified);
+    WString text;
+    for (int fit = 0; fit < 4; ++fit) {
+        WString age = FormatShortAge(modified, fit > 0);
+        if (size == 0)
+            text = fit < 3 ? L"EMPTY / " + age : WString(L"EMPTY");
+        else if (fit < 2)
+            text = FormatThousands(size) + L" B / " + age;
+        else
+            text = fit == 2 ? FormatShortSize(size) + L" / " + age : age;
+        if (MeasureLabel(dc, g_fonts.label, text.c_str(), Tracking()) <= width)
+            break;
+    }
+    return text;
 }
 
 static HWND OpenDialog(HWND owner, Dlg* d, const WString& caption, int w, int h)
@@ -294,7 +285,7 @@ static void PaintConfirm(Dlg* d, HDC dc, int w, int h)
         RECT rule = { pad, y, w - pad, y + 1 };
         Fill(dc, rule, kRule);
         for (size_t i = 0; i < s.rows.size(); ++i) {
-            PaintFileRow(dc, pad, w - pad, y, s.rows[i].name, s.rows[i].meta, s.rows[i].action, kSecondary);
+            PaintFileRow(dc, pad, w - pad, y, s.rows[i], kSecondary);
             y += S(61);
         }
     }
@@ -335,24 +326,23 @@ void RunMessageDialog(HWND owner, const WString& caption, const WString& label, 
 // Unfinished session
 
 struct WorkFileState {
-    WString name, meta, status;
+    WString name, status;
+    bool exists;
+    ULONGLONG size;
+    FILETIME modified;
     COLORREF color;
 };
 
 static WorkFileState LookAtWorkFile(const Session& s, const wchar_t* name)
 {
-    WorkFileState f;
+    WorkFileState f = {};
     f.name = name;
     f.color = kFaint;
-    ULONGLONG size;
-    FILETIME modified;
     WString path = JoinPath(s.workDir, name);
-    if (!ProbeFile(path, &size, &modified)) {
-        f.meta = L"NOT IN WORK";
+    f.exists = ProbeFile(path, &f.size, &f.modified);
+    if (!f.exists)
         return f;
-    }
-    f.meta = FileMeta(true, size, modified);
-    if (size == 0) {
+    if (f.size == 0) {
         f.status = L"EMPTY";
         return f;
     }
@@ -394,7 +384,8 @@ static void PaintRecover(Dlg* d, HDC dc, int w, int h)
         RECT c = { pad, y, pad + S(130), y + S(36) };
         DrawLabel(dc, g_fonts.mono, kWhite, f->name.c_str(), c, DT_LEFT | DT_VCENTER);
         c = { pad + S(140), y, pad + S(300), y + S(36) };
-        DrawLabel(dc, g_fonts.label, kFaint, f->meta.c_str(), c, DT_LEFT | DT_VCENTER, Tracking());
+        WString meta = FitFileMeta(dc, f->exists, f->size, f->modified, c.right - c.left);
+        DrawLabel(dc, g_fonts.label, kFaint, meta.c_str(), c, DT_LEFT | DT_VCENTER, Tracking());
         c = { pad + S(300), y, w - pad, y + S(36) };
         DrawLabel(dc, g_fonts.label, f->color, f->status.c_str(), c, DT_RIGHT | DT_VCENTER, Tracking());
         RECT rule = { pad, y + S(36), w - pad, y + S(37) };
@@ -430,7 +421,7 @@ RecoverChoice RunRecoverDialog(HWND owner, const Session& s)
     wchar_t stageText[8];
     wsprintfW(stageText, L"%02d", stage);
     r.line = SessionTitleText(s) + L" / STOPPED AT " + stageText + L" " + Upper(StageTitle(s.type, stage)) + L" / " +
-             FormatDay(last);
+             FormatDayAge(last);
 
     Dlg d = {};
     d.paint = PaintRecover;

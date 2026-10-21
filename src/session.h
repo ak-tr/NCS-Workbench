@@ -207,4 +207,5 @@ HANDLE LockWorkDir(const WString& workDir);
 bool ProbeFile(const WString& path, ULONGLONG* size, FILETIME* modified);
 WString FormatClock(const SYSTEMTIME& t);  // 14:12
 WString FormatDay(const SYSTEMTIME& t);    // 19 OCT 14:12
+WString FormatDayAge(const SYSTEMTIME& t); // 3 MIN AGO up to 6 hours ago, else FormatDay
 bool HasTime(const SYSTEMTIME& t);
