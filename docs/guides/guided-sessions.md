@@ -18,18 +18,20 @@ The screenshots were taken on a test setup: the sample trace from `samples/`, a 
 
 ## 01 Prepare WORK
 
-![Start a session dialog: what happens to FSW_PSW.TRC and FSW_PSW.MAN, the option to use the TRC as the first read, and the session folder](../screenshots/sessions/02-start-dialog.png)
+![Prepare WORK before the session starts: MAN picked, what happens to FSW_PSW.TRC and FSW_PSW.MAN, the option to use the TRC as the first read, the stages to come and the session folder](../screenshots/sessions/02-prepare-work.png)
 
-Before anything changes, the dialog lists what will happen to the two files:
+**START SESSION** shows step 01 in the window. Nothing has started yet: **NEW SESSION / NOT STARTED** at the top, and nothing in WORK changes until you confirm. **MAN** is the type for everything in this guide; to code from the vehicle order instead, pick **VO** and see [VO coding sessions](vo-sessions.md). The **NEXT** strip lists the stages to come for the type picked.
+
+The tile lists what will happen to the two files, and updates if they change while you look:
 
 - `FSW_PSW.TRC` is saved to the session folder, then **deleted**, so the next read is clearly a new one.
 - `FSW_PSW.MAN` is saved, then **emptied**, so NCS Expert codes nothing by accident. If there's no MAN, an empty one is created.
 
-Nothing else in WORK is touched. **SAVE AND CLEAR** is red because it changes files, and **CANCEL** has the focus. If neither file has anything to clear, the button is **START** instead.
+Nothing else in WORK is touched. **SAVE AND CLEAR** is red because it changes files, and **CANCEL** (or Esc) has the focus and goes back to the home screen. If neither file has anything to clear, the button is **START** instead.
 
-**Use this FSW_PSW.TRC as the first read** skips the read in step 02 and keeps the TRC. Only tick it if you're sure the trace was just read from this car and this ECU and nothing was coded since. The amber box shows how old the trace is.
+**Use this FSW_PSW.TRC as the first read** skips the read in step 02 and keeps the TRC. Only tick it if you're sure the trace was just read from this car and this ECU and nothing was coded since. The amber box shows how old the trace is; on a small window it shrinks to one line, or moves to the status line under the title.
 
-**CHANGE** picks another backup folder. Each session gets its own folder named after the time it started, for example `Sessions\20261019-174144`.
+**CHANGE** next to the session folder picks another backup folder. Each session gets its own folder named after the time it started, for example `Sessions\20261019-174144`.
 
 ### If preparing fails
 

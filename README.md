@@ -53,7 +53,8 @@ If NCS Dummy's `Translations.csv` sits next to your `NcsDummy.exe`, Workbench sh
 
 ## Guides
 
-- [Guided coding sessions](docs/guides/guided-sessions.md): every step of a session with screenshots, what can go wrong at each one, the history window and what's saved.
+- [Guided coding sessions](docs/guides/guided-sessions.md): every step of a MAN session (edit in NCS Dummy, code, verify) with screenshots, what can go wrong at each one, the history window and what's saved.
+- [VO coding sessions](docs/guides/vo-sessions.md): coding from the vehicle order with `SG_CODIEREN`, keeping the MAN out of it, and seeing what the coding changed.
 - [Main window and tools](docs/guides/main-window.md): the home screen, the WORK folder panel and the three manual tools.
 - [Parameter Explorer and English names](docs/guides/parameter-explorer.md): searching an SP-Daten chassis for a function, reading the results, NCS Dummy's translations and their settings, and trying it on a copy of SP-Daten.
 - [Themes](docs/guides/themes.md): the five colour schemes (dark, dim and light) and how to switch between them.

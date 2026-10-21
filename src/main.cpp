@@ -62,6 +62,10 @@ enum {
     IDC_TRANSLATIONS,
     IDC_LINK1,  // IDC_LINK1 .. +2
     IDC_CHECK1 = IDC_LINK1 + 3,
+    IDC_TYPE_MAN = IDC_CHECK1 + 5,  // step 01 before the session starts
+    IDC_TYPE_VO,
+    IDC_REUSE,
+    IDC_START_CONFIRM,
 };
 
 enum { TIMER_REFRESH = 1, TIMER_POLL, TIMER_SESSION };
@@ -92,6 +96,9 @@ struct Layout {
     // Session
     RECT stageRows[kStageCount + 1];  // by stage, empty when it's the tile
     RECT tile, number, title, status, body, error, buttons, primary, secondary;
+    // Step 01 before the session starts (and tile, number, ... above)
+    RECT typeMan, typeVo, files[2], reuse, warning, strip;
+    bool fullWarning;  // room for the reuse warning's text, else one line
 };
 
 struct App {
@@ -103,6 +110,7 @@ struct App {
     HWND themeButton = NULL, translationsButton = NULL, explorerButton = NULL;
     HWND links[kLinkCount] = {};
     HWND checks[kCheckCount] = {};
+    HWND typeMan = NULL, typeVo = NULL, reuseCheck = NULL, startDanger = NULL, startPlain = NULL;
     HWND lastFocus = NULL;
     HIMAGELIST rowHeight = NULL;
     Layout lay = {};
@@ -123,11 +131,15 @@ struct App {
 
     // Guided session; state SESSION_NONE when idle.
     Session session;
-    HANDLE lock = NULL;  // LockWorkDir while a session is open
+    // START SESSION shows step 01 in the column first; nothing exists or changes
+    // until SAVE AND CLEAR. The WORK folder is locked from then on.
+    bool previewing = false;
+    HANDLE lock = NULL;  // LockWorkDir while a session is open or previewed
     std::vector<Session> recent;
     SessionState shownState = SESSION_NONE;
     SessionReview review;              // REVIEWING
     SessionVerification verification;  // VERIFYING
+    SessionChanges changes;            // VERIFYING, VO
 };
 
 static App g;
@@ -135,6 +147,17 @@ static App g;
 static bool InSession()
 {
     return IsSessionOpen(g.session.state);
+}
+
+static bool IsVo()
+{
+    return g.session.type == SESSION_TYPE_VO;
+}
+
+// A session is open or about to start: the idle controls are hidden.
+static bool Busy()
+{
+    return InSession() || g.previewing;
 }
 
 static WString IntText(int n)
@@ -195,6 +218,31 @@ static const FileEntry* FindFile(const wchar_t* name)
             return &g.files[i];
     }
     return NULL;
+}
+
+// VO: NCS Expert would code a non-empty MAN on top of the vehicle order.
+static bool WorkManHasData()
+{
+    const FileEntry* man = FindFile(kManName);
+    return man && man->size > 0;
+}
+
+// Step 01 preview: WORK's TRC can be the first read.
+static bool CanReuseTrace()
+{
+    const FileEntry* trc = FindFile(kTrcName);
+    return trc && trc->size > 0;
+}
+
+// Step 01 preview: starting would delete or empty something (SAVE AND CLEAR, red).
+static bool StartClearsFiles()
+{
+    return FindFile(kTrcName) || WorkManHasData();
+}
+
+static bool PreviewVo()
+{
+    return IsThemedChecked(g.typeVo);
 }
 
 static bool IsKeyFile(const WString& name)
@@ -268,9 +316,13 @@ static StateUi UiFor(SessionState state)
     case SESSION_CODING:
         u.primary = L"I HAVE CODED";
         u.primaryWidth = 180;
+        u.checks = true;
+        if (IsVo()) {
+            u.links[0] = WorkManHasData() ? L"EMPTY MAN" : NULL;
+            break;
+        }
         u.secondary = L"BACK TO REVIEW";
         u.secondaryWidth = 190;
-        u.checks = true;
         break;
     case SESSION_CODED:
         u.primary = L"PREPARE READ-BACK";
@@ -286,6 +338,7 @@ static StateUi UiFor(SessionState state)
         u.primaryWidth = 150;
         u.secondary = L"READ BACK AGAIN";
         u.secondaryWidth = 190;
+        u.links[0] = IsVo() && g.changes.loaded ? L"SHOW ALL" : NULL;
         break;
     default:
         break;
@@ -299,10 +352,14 @@ static void UpdateSessionCache()
         LoadReview(g.session, 0, &g.review);
     else
         g.review = SessionReview();
-    if (g.session.state == SESSION_VERIFYING)
+    if (g.session.state == SESSION_VERIFYING && !IsVo())
         LoadVerification(g.session, &g.verification);
     else
         g.verification = SessionVerification();
+    if (g.session.state == SESSION_VERIFYING && IsVo())
+        LoadChanges(g.session, &g.changes);
+    else
+        g.changes = SessionChanges();
 }
 
 // A warning about the review's files: the MAN's first, else the trace's.
@@ -345,9 +402,26 @@ static std::vector<size_t> ReviewRows()
     return rows;
 }
 
+// VO: functions the read-back differs in from the first read.
+static std::vector<size_t> ChangeRows()
+{
+    std::vector<size_t> rows;
+    for (size_t i = 0; i < g.changes.rows.size(); ++i) {
+        if (g.changes.rows[i].status != DIFF_SAME)
+            rows.push_back(i);
+    }
+    return rows;
+}
+
 static WString StageDoneText(int stage)
 {
     const Session& s = g.session;
+    if (IsVo() && stage >= 3) {
+        if (stage == 3)
+            return L"YOU CONFIRMED " + FormatClock(s.codedAt);
+        const Snapshot* rb = LastSnapshot(s, SNAP_READBACK);
+        return rb ? L"READ BACK " + FormatClock(rb->taken) : WString(L"DONE");
+    }
     switch (stage) {
     case 1:
         return L"DONE " + FormatClock(s.prepared) + (s.reuseTrc ? L" / TRACE IN WORK USED" : L"");
@@ -410,13 +484,30 @@ static WString SessionStatus(COLORREF* color)
                Plural(g.review.changes, L"CHANGED FUNCTION", L"CHANGED FUNCTIONS");
     }
     case SESSION_CODING:
+        if (IsVo() && WorkManHasData()) {
+            *color = kBad;
+            return L"FSW_PSW.MAN ISN'T EMPTY / IT WOULD BE CODED TOO";
+        }
         *color = kGood;
-        return L"FSW_PSW.MAN IN WORK IS THE REVIEWED EXPORT";
+        return IsVo() ? L"FSW_PSW.MAN IN WORK IS EMPTY / READY FOR SG_CODIEREN"
+                      : L"FSW_PSW.MAN IN WORK IS THE REVIEWED EXPORT";
     case SESSION_CODED:
         return L"CODING REPORTED " + FormatClock(s.codedAt) + L" / PREPARE THE READ-BACK";
     case SESSION_AWAITING_READBACK:
         return L"WATCHING WORK FOR THE READ-BACK FSW_PSW.TRC";
     case SESSION_VERIFYING: {
+        if (IsVo()) {
+            const Snapshot* rb = LastSnapshot(s, SNAP_READBACK);
+            WString head = L"READ-BACK " + IntText(CountSnapshots(s, SNAP_READBACK)) + L" / " +
+                           (rb ? FormatClock(rb->taken) : WString()) + L" / ";
+            if (!g.changes.loaded) {
+                *color = kBad;
+                return head + L"COULDN'T READ THE SAVED TRACES";
+            }
+            *color = g.changes.fewShared ? kWarn : g.changes.changes ? kAccent : kGood;
+            return head + (g.changes.changes ? Plural(g.changes.changes, L"FUNCTION CHANGED", L"FUNCTIONS CHANGED")
+                                             : WString(L"NO CHANGES"));
+        }
         const VerifySummary& v = s.verify;
         int total = v.match + v.mismatch + v.unverifiable;
         const Snapshot* rb = LastSnapshot(s, SNAP_READBACK);
@@ -443,7 +534,7 @@ static WString FooterStatus()
         return L"SESSION ACTIVE / WAITING FOR FSW_PSW.MAN";
     case SESSION_REVIEWING:
     case SESSION_CODING:
-        return L"SESSION ACTIVE / WATCHING FSW_PSW.MAN FOR CHANGES";
+        return IsVo() ? L"SESSION ACTIVE / VO CODING" : L"SESSION ACTIVE / WATCHING FSW_PSW.MAN FOR CHANGES";
     case SESSION_CODED:
         return L"SESSION ACTIVE / CODING REPORTED";
     case SESSION_AWAITING_READBACK:
@@ -477,17 +568,18 @@ static void ComputeSessionLayout()
     Layout& l = g.lay;
     for (int i = 0; i <= kStageCount; ++i)
         l.stageRows[i] = RECT();
-    int stage = std::min(std::max(SessionStage(g.session.state), 1), 6);
+    int count = StageCount(g.session.type);
+    int stage = std::min(std::max(SessionStage(g.session), 1), LastTileStage(g.session.type));
     int bottom = l.footer.top - S(20);
     int y = S(48);
     for (int i = 1; i < stage; ++i) {
         l.stageRows[i] = { l.left, y, l.right, y + S(32) };
         y += S(34);
     }
-    int tileBottom = std::max(bottom - (kStageCount - stage) * S(34), y + S(200));
+    int tileBottom = std::max(bottom - (count - stage) * S(34), y + S(200));
     l.tile = { l.left, y, l.right, tileBottom };
     y = l.tile.bottom + S(2);
-    for (int i = stage + 1; i <= kStageCount; ++i) {
+    for (int i = stage + 1; i <= count; ++i) {
         l.stageRows[i] = { l.left, y, l.right, y + S(32) };
         y += S(34);
     }
@@ -514,6 +606,113 @@ static void ComputeSessionLayout()
     if (!g.session.error.empty() && g.session.state != SESSION_PREPARING) {
         l.error = { textLeft, by - S(52), textRight, by - S(8) };
         l.body.bottom = l.error.top - S(6);
+    }
+}
+
+static int TextHeight(HFONT font, const WString& text, int width)
+{
+    HDC dc = GetDC(g.hwnd);
+    HGDIOBJ old = SelectObject(dc, font);
+    RECT r = { 0, 0, width, 0 };
+    DrawTextW(dc, text.c_str(), -1, &r, DT_LEFT | DT_WORDBREAK | DT_CALCRECT | DT_NOPREFIX);
+    SelectObject(dc, old);
+    ReleaseDC(g.hwnd, dc);
+    return r.bottom;
+}
+
+// "21:24 (1 H 35 MIN AGO)" for the TRC in WORK; lower: "(1 h 35 min ago)" for a sentence.
+static WString TraceAgeText(bool lower)
+{
+    const FileEntry* trc = FindFile(kTrcName);
+    if (!trc)
+        return WString();
+    SYSTEMTIME utc, local;
+    FileTimeToSystemTime(&trc->modified, &utc);
+    SystemTimeToTzSpecificLocalTime(NULL, &utc, &local);
+    WString age = FormatAge(trc->modified);
+    if (lower)
+        CharLowerBuffW(&age[0], (DWORD)age.size());
+    return FormatClock(local) + L" (" + age + L")";
+}
+
+// Step 01 preview: what happens to each file, for the type and reuse choice.
+static const wchar_t* PreviewAction(int file)
+{
+    bool vo = PreviewVo();
+    if (file == 0) {
+        if (!FindFile(kTrcName))
+            return L"Not in WORK. Nothing to do.";
+        return IsThemedChecked(g.reuseCheck) ? L"Saved to the session folder and kept as the first read."
+                                             : L"Saved to the session folder, then deleted so the next read is "
+                                               L"clearly new.";
+    }
+    const FileEntry* man = FindFile(kManName);
+    if (!man)
+        return vo ? L"Not in WORK. Created empty, so NCS Expert codes nothing on top of the VO."
+                  : L"Not in WORK. Created empty, so NCS Expert codes nothing by accident.";
+    if (man->size == 0)
+        return L"Already empty. Saved to the session folder as a record.";
+    return vo ? L"Saved to the session folder, then emptied to 0 B so NCS Expert doesn't code it on top of the VO."
+              : L"Saved to the session folder, then emptied to 0 B so NCS Expert codes nothing by accident.";
+}
+
+static WString ReuseWarningText()
+{
+    return L"This trace was written at " + TraceAgeText(true) + L". Use it only if it was read from this car and "
+           L"this ECU and nothing was coded since.";
+}
+
+// Where a file row's action text starts.
+static int PreviewSplit(const RECT& row)
+{
+    return row.left + std::min(S(176), (int)(row.right - row.left) * 2 / 5);
+}
+
+// Step 01 before the session exists: the tile down to the NEXT strip, then the session folder.
+static void ComputePreviewLayout()
+{
+    Layout& l = g.lay;
+    for (int i = 0; i <= kStageCount; ++i)
+        l.stageRows[i] = RECT();
+    l.strip = { l.left, l.backupDir.top - S(12) - S(32), l.right, l.backupDir.top - S(12) };
+    l.tile = { l.left, S(48), l.right, l.strip.top - S(2) };
+    int textLeft = l.tile.left + (l.compact ? S(20) : S(100));
+    int textRight = l.tile.right - S(20);
+    l.number = { l.tile.left + S(20), l.tile.top + S(18), l.tile.left + S(96), l.tile.top + S(64) };
+    l.title = { textLeft, l.tile.top + S(20), textRight, l.tile.top + S(46) };
+    l.status = { textLeft, l.tile.top + S(52), textRight, l.tile.top + S(68) };
+    int by = l.tile.bottom - S(20) - S(44);
+    l.buttons = { textLeft, by, textRight, by + S(44) };
+    int pw = S(l.compact ? 170 : 200), sw = S(l.compact ? 120 : 140);
+    l.primary = { textRight - pw, by, textRight, by + S(44) };
+    l.secondary = { l.primary.left - S(10) - sw, by, l.primary.left - S(10), by + S(44) };
+    l.body = { textLeft, l.status.bottom + S(16), textRight, by - S(14) };
+    l.error = RECT();
+
+    int y = l.body.top - S(4);
+    l.typeMan = { textLeft - S(2), y, textLeft + S(100), y + S(28) };
+    l.typeVo = { textLeft + S(120), y, textLeft + S(220), y + S(28) };
+    y += S(28) + S(22) + S(10);  // the hint under them
+    for (int i = 0; i < 2; ++i) {
+        // Name and size on the left (48 px), the action on the right, as many lines as it takes.
+        RECT row = { textLeft, y, textRight, y };
+        int text = TextHeight(g_fonts.body, PreviewAction(i), textRight - PreviewSplit(row));
+        row.bottom = y + std::max(S(52), S(8) + text + S(8));
+        l.files[i] = row;
+        y = row.bottom;
+    }
+    l.reuse = RECT();
+    l.warning = RECT();
+    l.fullWarning = false;
+    if (CanReuseTrace()) {
+        l.reuse = { textLeft - S(2), y + S(8), textRight, y + S(34) };
+        y += S(40);
+        // The warning's full text where it fits; one line on short windows; else the status line says it.
+        int room = l.body.bottom - y;
+        int full = S(30) + TextHeight(g_fonts.body, ReuseWarningText(), textRight - textLeft - S(28) - S(28)) + S(8);
+        l.fullWarning = room >= full;
+        if (room >= S(32))
+            l.warning = { textLeft + S(28), y, textRight, y + (l.fullWarning ? full : S(32)) };
     }
 }
 
@@ -554,7 +753,10 @@ static void ComputeLayout(int w, int h)
     l.panelHead = { l.panel.left + S(16), pad, w - S(16), pad + S(16) };
     l.workDir = { l.panel.left + S(16), l.footer.top - pad - S(44), w - S(16), l.footer.top - pad };
     l.list = { l.panel.left + 1, S(48), w, l.workDir.top - S(16) };
-    ComputeSessionLayout();
+    if (g.previewing)
+        ComputePreviewLayout();
+    else
+        ComputeSessionLayout();
 }
 
 // "CHANGE"-style link in the top-right of a label + value block.
@@ -663,37 +865,53 @@ static void LayoutChildren()
     GetClientRect(g.hwnd, &rc);
     ComputeLayout(rc.right, rc.bottom);
     const Layout& l = g.lay;
-    bool session = InSession();
+    bool session = InSession(), busy = Busy(), preview = g.previewing;
 
     // Idle controls
-    Show(g.startButton, !session);
-    Show(g.historyButton, !session);
+    Show(g.startButton, !busy);
+    Show(g.historyButton, !busy);
     Place(g.startButton, l.startButton);
     Place(g.historyButton, RightLink(g.historyButton, l.right, (l.header.top + l.header.bottom) / 2));
     for (int i = 0; i < kToolCount; ++i) {
-        Show(g.toolButtons[i], !session);
+        Show(g.toolButtons[i], !busy);
         Place(g.toolButtons[i], LeftLink(g.toolButtons[i], l.tools[i].left + S(16), l.tools[i].bottom - S(24)));
     }
-    Show(g.backupDirButton, !session);
-    Show(g.showBackup, !session && !g.lastBackup.empty());
+    Show(g.backupDirButton, !session);  // the preview changes the session folder with it
+    Show(g.showBackup, !busy && !g.lastBackup.empty());
     Place(g.backupDirButton, BlockLinkRect(l.backupDir));
     Place(g.showBackup, ShowBackupRect());
-    Show(g.workDirButton, !session);  // the session keeps its WORK folder
+    Show(g.workDirButton, !busy);  // the session keeps its WORK folder
     Place(g.workDirButton, BlockLinkRect(l.workDir));
     Place(g.themeButton, ThemeLinkRect());
     Place(g.translationsButton, TranslationsLinkRect());
-    Show(g.explorerButton, !session);
+    Show(g.explorerButton, !busy);
     Place(g.explorerButton, ExplorerLinkRect());
+
+    // Step 01 before the session starts
+    if (!CanReuseTrace())
+        SetThemedCheck(g.reuseCheck, false);
+    Show(g.typeMan, preview);
+    Show(g.typeVo, preview);
+    Show(g.reuseCheck, preview && CanReuseTrace());
+    Show(g.startDanger, preview && StartClearsFiles());
+    Show(g.startPlain, preview && !StartClearsFiles());
+    Place(g.typeMan, l.typeMan);
+    Place(g.typeVo, l.typeVo);
+    Place(g.reuseCheck, l.reuse);
+    Place(g.startDanger, l.primary);
+    Place(g.startPlain, l.primary);
 
     // Session controls
     StateUi u = UiFor(g.session.state);
     Show(g.cancelSession, session);
     Place(g.cancelSession, RightLink(g.cancelSession, l.right, (l.header.top + l.header.bottom) / 2));
     Show(g.primary, session && u.primary);
-    Show(g.secondary, session && u.secondary);
+    Show(g.secondary, (session && u.secondary) || preview);
     if (u.primary)
         SetWindowTextW(g.primary, u.primary);
-    if (u.secondary)
+    if (preview)
+        SetWindowTextW(g.secondary, L"CANCEL");
+    else if (u.secondary)
         SetWindowTextW(g.secondary, u.secondary);
     Place(g.primary, l.primary);
     Place(g.secondary, l.secondary);
@@ -724,6 +942,19 @@ static void LayoutChildren()
     case SESSION_REVIEWING: {
         ReviewGeometry r = ComputeReviewGeometry((int)ReviewRows().size(), ReviewHasWarning());
         Place(g.links[0], RightLink(g.links[0], r.warning.right - S(14), (r.warning.top + r.warning.bottom) / 2));
+        break;
+    }
+    case SESSION_CODING: {  // VO: EMPTY MAN on the line that checks it
+        int y = l.body.top + kCheckCount * S(26);
+        Place(g.links[0], RightLink(g.links[0], l.body.right, y + S(12)));
+        break;
+    }
+    case SESSION_VERIFYING: {  // VO: SHOW ALL at the end of the summary line
+        std::vector<size_t> rows = ChangeRows();
+        ReviewGeometry r = ComputeReviewGeometry((int)rows.size(), g.changes.fewShared);
+        RECT summary = rows.empty() ? RECT{ l.body.left, l.body.top + S(30), l.body.right, l.body.top + S(46) }
+                                    : r.summary;
+        Place(g.links[0], RightLink(g.links[0], summary.right, (summary.top + summary.bottom) / 2));
         break;
     }
     case SESSION_CODED:
@@ -829,13 +1060,12 @@ static void PaintIdle(HDC dc)
     else
         DrawLabel(dc, g_fonts.body, kSecondary,
                   L"Saves the current FSW_PSW.TRC and FSW_PSW.MAN, clears them for a fresh read, then walks you "
-                  L"through reading, editing, coding and checking the ECU.",
+                  L"through reading, coding and checking the ECU.",
                   r, DT_LEFT | DT_TOP | DT_WORDBREAK);
     if (!l.compact) {
         r = { t.left + S(24), t.bottom - S(36), t.right - S(24), t.bottom - S(20) };
-        DrawLabel(dc, g_fonts.label, kDisabled,
-                  L"01 PREPARE  02 READ  03 EDIT  04 REVIEW  05 CODE  06 VERIFY  07 FINISH", r, DT_LEFT | DT_VCENTER,
-                  Tracking());
+        DrawLabel(dc, g_fonts.label, kDisabled, L"MAN / EDIT AND VERIFY    VO / SEE WHAT CHANGED", r,
+                  DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS, Tracking());
     }
 
     // Tools
@@ -1066,6 +1296,82 @@ static void PaintVerification(HDC dc)
     PaintNote(dc, L"A match means the ECU holds the value. It doesn't prove the feature works in the car.");
 }
 
+// VO: Function | Before | After for every function the read-back differs in.
+static void PaintChanges(HDC dc)
+{
+    const RECT& b = g.lay.body;
+    const SessionChanges& ch = g.changes;
+    if (!ch.loaded) {
+        DrawLabel(dc, g_fonts.body, kBad, L"Couldn't read the saved traces to compare. Check the session folder.", b,
+                  DT_LEFT | DT_TOP | DT_WORDBREAK);
+        return;
+    }
+    std::vector<size_t> rows = ChangeRows();
+    ReviewGeometry geo = ComputeReviewGeometry((int)rows.size(), ch.fewShared);
+    int width = b.right - b.left;
+    int beforeLeft = b.left + width * 46 / 100, afterLeft = b.left + width * 73 / 100;
+    if (rows.empty()) {
+        RECT r = { b.left, b.top, b.right, b.top + S(22) };
+        DrawLabel(dc, g_fonts.body, kSecondary, L"The read-back matches the first read. The VO coding changed nothing.",
+                  r, DT_LEFT | DT_VCENTER);
+        geo.summary = { b.left, b.top + S(30), b.right, b.top + S(46) };
+        geo.warning = { b.left, geo.summary.bottom + S(10), b.right, geo.summary.bottom + S(42) };
+    } else {
+        RECT body = { b.left, geo.header.top, b.right,
+                      geo.rowTop + geo.shown * ReviewRowHeight() + (geo.more ? ReviewRowHeight() : 0) };
+        Fill(dc, body, kTile3);
+        RECT c = { b.left + S(14), geo.header.top, beforeLeft - S(10), geo.header.bottom };
+        DrawLabel(dc, g_fonts.label, kFaint, L"FUNCTION", c, DT_LEFT | DT_VCENTER, Tracking());
+        c = { beforeLeft, geo.header.top, afterLeft - S(10), geo.header.bottom };
+        DrawLabel(dc, g_fonts.label, kFaint, L"BEFORE", c, DT_LEFT | DT_VCENTER, Tracking());
+        c = { afterLeft, geo.header.top, b.right - S(10), geo.header.bottom };
+        DrawLabel(dc, g_fonts.label, kFaint, L"AFTER", c, DT_LEFT | DT_VCENTER, Tracking());
+        RECT rule = { b.left, geo.header.bottom - 1, b.right, geo.header.bottom };
+        Fill(dc, rule, kRule);
+    }
+    for (int i = 0; i < geo.shown; ++i) {
+        const DiffRow& row = ch.rows[rows[i]];
+        int y = geo.rowTop + i * ReviewRowHeight();
+        RECT bar = { b.left, y, b.left + S(3), y + ReviewRowHeight() };
+        Fill(dc, bar, row.status == DIFF_CHANGED ? kAccent : kWarn);
+        RECT rule = { b.left, y + ReviewRowHeight() - 1, b.right, y + ReviewRowHeight() };
+        Fill(dc, rule, kTile1);
+        RECT c = { b.left + S(14), y, beforeLeft - S(10), y + ReviewRowHeight() };
+        DrawKeyword(dc, row.name, c, kWhite);
+        c = { beforeLeft, y, afterLeft - S(10), y + ReviewRowHeight() };
+        if (row.status == DIFF_ONLY_MAN)
+            DrawLabel(dc, g_fonts.label, kWarn, L"NOT BEFORE", c, DT_LEFT | DT_VCENTER, Tracking());
+        else
+            DrawValues(dc, row.trc, c, kText);
+        c = { afterLeft, y, b.right - S(10), y + ReviewRowHeight() };
+        if (row.status == DIFF_ONLY_TRC)
+            DrawLabel(dc, g_fonts.label, kWarn, L"NOT AFTER", c, DT_LEFT | DT_VCENTER, Tracking());
+        else
+            DrawValues(dc, row.man, c, row.status == DIFF_CHANGED ? kAccent : kText);
+    }
+    if (geo.more) {
+        int y = geo.rowTop + geo.shown * ReviewRowHeight();
+        RECT c = { b.left + S(14), y, b.right - S(10), y + ReviewRowHeight() };
+        WString more = L"+" + IntText(geo.more) + L" MORE / SHOW ALL LISTS EVERY FUNCTION";
+        DrawLabel(dc, g_fonts.label, kMuted, more.c_str(), c, DT_LEFT | DT_VCENTER, Tracking());
+    }
+
+    const DiffSummary& s = ch.summary;
+    WString summary = IntText(s.changed) + L" CHANGED / " + IntText(s.onlyTrc) + L" ONLY BEFORE / " +
+                      IntText(s.onlyMan) + L" ONLY AFTER / " + IntText(s.same) + L" SAME";
+    RECT sr = geo.summary;
+    sr.right -= LinkWidth(g.links[0]) + S(16);
+    DrawLabel(dc, g_fonts.label, kMuted, summary.c_str(), sr, DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS, Tracking());
+
+    if (ch.fewShared) {
+        DashedFrame(dc, geo.warning, kWarn);
+        RECT c = { geo.warning.left + S(14), geo.warning.top, geo.warning.right - S(14), geo.warning.bottom };
+        DrawLabel(dc, g_fonts.label, kWarn, L"FEW FUNCTIONS IN COMMON WITH THE FIRST READ / SAME ECU?", c,
+                  DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS, Tracking());
+    }
+    PaintNote(dc, L"These values come from the VO and SP-Daten. Check them against what you meant to change.");
+}
+
 static void PaintCheckMark(HDC dc, int x, int cy)
 {
     HPEN pen = CreatePen(PS_SOLID, std::max(1, S(2) / 2 + 1), kGood);
@@ -1105,11 +1411,19 @@ static void PaintSessionBody(HDC dc)
             L"Run CODIERDATEN_LESEN.",
             L"Come back here. The trace is picked up on its own.",
         };
-        PaintSteps(dc, steps, 4, b.top);
+        static const wchar_t* const voSteps[] = {
+            L"In NCS Expert, load the VO from the CAS (F1, then F3).",
+            L"Process ECU and pick the ECU you want to code.",
+            L"Run CODIERDATEN_LESEN.",
+            L"Come back here. The trace is picked up on its own.",
+        };
+        PaintSteps(dc, IsVo() ? voSteps : steps, 4, b.top);
         PaintWatchBox(dc, L"FSW_PSW.TRC", TraceWaitText().c_str(), true);
         RECT r = { l.buttons.left, l.buttons.top, l.buttons.right, l.buttons.bottom };
-        DrawLabel(dc, g_fonts.label, kDisabled, L"NEXT: CONFIRM THE ECU, THEN EDIT IN NCS DUMMY", r,
-                  DT_LEFT | DT_VCENTER, Tracking());
+        DrawLabel(dc, g_fonts.label, kDisabled,
+                  IsVo() ? L"NEXT: CONFIRM THE ECU, THEN CODE FROM THE VO"
+                         : L"NEXT: CONFIRM THE ECU, THEN EDIT IN NCS DUMMY",
+                  r, DT_LEFT | DT_VCENTER, Tracking());
         break;
     }
     case SESSION_AWAITING_ECU: {
@@ -1162,13 +1476,20 @@ static void PaintSessionBody(HDC dc)
         break;
     case SESSION_CODING: {
         int y = b.top + kCheckCount * S(26);
-        PaintCheckMark(dc, b.left, y + S(12));
+        bool manInTheWay = IsVo() && WorkManHasData();
+        if (!manInTheWay)
+            PaintCheckMark(dc, b.left, y + S(12));
         RECT r = { b.left + S(26), y, b.right, y + S(24) };
-        WString text = L"Reviewed MAN is in WORK";
-        DrawLabel(dc, g_fonts.body, kSecondary, text.c_str(), r, DT_LEFT | DT_VCENTER);
-        int x = r.left + TextWidth(g_fonts.body, text.c_str(), 0) + S(12);
-        r = { x, y, b.right, y + S(24) };
-        DrawLabel(dc, g_fonts.label, kGood, L"CHECKED BY WORKBENCH", r, DT_LEFT | DT_VCENTER, Tracking());
+        WString text = !IsVo()       ? L"Reviewed MAN is in WORK"
+                       : manInTheWay ? L"FSW_PSW.MAN in WORK isn't empty"
+                                     : L"FSW_PSW.MAN in WORK is empty";
+        // Not empty: the status line says why, EMPTY MAN sits on the right.
+        DrawLabel(dc, g_fonts.body, manInTheWay ? kBad : kSecondary, text.c_str(), r, DT_LEFT | DT_VCENTER);
+        if (!manInTheWay) {
+            int x = r.left + TextWidth(g_fonts.body, text.c_str(), 0) + S(12);
+            r = { x, y, b.right, y + S(24) };
+            DrawLabel(dc, g_fonts.label, kGood, L"CHECKED BY WORKBENCH", r, DT_LEFT | DT_VCENTER, Tracking());
+        }
         y += S(36);
         if (y + S(40) <= b.bottom) {
             r = { b.left, y, b.right, b.bottom };
@@ -1181,9 +1502,12 @@ static void PaintSessionBody(HDC dc)
     }
     case SESSION_CODED:
         DrawLabel(dc, g_fonts.body, kSecondary,
-                  L"To check the coding, read the ECU again. Preparing saves FSW_PSW.TRC and FSW_PSW.MAN in the "
-                  L"session, deletes the TRC and empties the MAN, so the read-back is clearly new and nothing gets "
-                  L"coded twice by accident.",
+                  IsVo() ? L"To see what the VO coding changed, read the ECU again. Preparing saves FSW_PSW.TRC and "
+                           L"FSW_PSW.MAN in the session, deletes the TRC and empties the MAN, so the read-back is "
+                           L"clearly new. It's then compared with the first read."
+                         : L"To check the coding, read the ECU again. Preparing saves FSW_PSW.TRC and FSW_PSW.MAN in "
+                           L"the session, deletes the TRC and empties the MAN, so the read-back is clearly new and "
+                           L"nothing gets coded twice by accident.",
                   b, DT_LEFT | DT_TOP | DT_WORDBREAK);
         break;
     case SESSION_AWAITING_READBACK: {
@@ -1197,7 +1521,10 @@ static void PaintSessionBody(HDC dc)
         break;
     }
     case SESSION_VERIFYING:
-        PaintVerification(dc);
+        if (IsVo())
+            PaintChanges(dc);
+        else
+            PaintVerification(dc);
         break;
     default:
         break;
@@ -1211,15 +1538,16 @@ static void PaintSession(HDC dc)
 {
     const Layout& l = g.lay;
     const Session& s = g.session;
-    WString head = L"SESSION / " + (s.module.empty() ? s.id : s.daten + L" / " + s.module);
+    WString head = WString(IsVo() ? L"VO SESSION / " : L"SESSION / ") +
+                   (s.module.empty() ? s.id : s.daten + L" / " + s.module);
     if (!s.vehicle.empty())
         head += L" / " + s.vehicle;
     RECT hr = l.header;
     hr.right -= LinkWidth(g.cancelSession) + S(16);
     DrawLabel(dc, g_fonts.label, kFaint, head.c_str(), hr, DT_LEFT | DT_VCENTER, Tracking());
 
-    int stage = SessionStage(s.state);
-    for (int i = 1; i <= kStageCount; ++i) {
+    int stage = SessionStage(s);
+    for (int i = 1; i <= StageCount(s.type); ++i) {
         const RECT& r = l.stageRows[i];
         if (r.right == r.left)
             continue;
@@ -1233,7 +1561,7 @@ static void PaintSession(HDC dc)
         int statusWidth = status.empty() ? 0 : TextWidth(g_fonts.label, status.c_str(), Tracking()) + S(8);
         statusWidth = std::min(statusWidth, (int)(r.right - r.left) / 2);
         c = { r.left + S(52), r.top, r.right - S(20) - statusWidth - S(8), r.bottom };
-        DrawLabel(dc, g_fonts.body, done ? kText : kFaint, StageTitle(i), c, DT_LEFT | DT_VCENTER);
+        DrawLabel(dc, g_fonts.body, done ? kText : kFaint, StageTitle(s.type, i), c, DT_LEFT | DT_VCENTER);
         if (!status.empty()) {
             c = { r.right - S(20) - statusWidth, r.top, r.right - S(20), r.bottom };
             DrawLabel(dc, g_fonts.label, kGood, status.c_str(), c, DT_RIGHT | DT_VCENTER, Tracking());
@@ -1246,12 +1574,99 @@ static void PaintSession(HDC dc)
         wsprintfW(n, L"%02d", std::max(stage, 1));
         DrawLabel(dc, g_fonts.number, kNumber, n, l.number, DT_LEFT | DT_TOP, -S(2));
     }
-    const wchar_t* title = s.state == SESSION_CODING ? L"Code the ECU in NCS Expert" : StageTitle(stage);
+    const wchar_t* title = s.state != SESSION_CODING ? StageTitle(s.type, stage)
+                           : IsVo()                  ? L"Code from the vehicle order"
+                                                     : L"Code the ECU in NCS Expert";
     DrawLabel(dc, g_fonts.title, kWhite, title, l.title, DT_LEFT | DT_TOP);
     COLORREF color;
     WString status = SessionStatus(&color);
     DrawLabel(dc, g_fonts.label, color, status.c_str(), l.status, DT_LEFT | DT_TOP, Tracking());
     PaintSessionBody(dc);
+}
+
+// ---------------------------------------------------------------------------
+// Painting: step 01 before the session starts
+
+// FSW_PSW.TRC / 2,167 B / 17:41 on the left, what happens to it on the right.
+static void PaintPreviewFile(HDC dc, const RECT& row, const wchar_t* name, const wchar_t* action)
+{
+    const FileEntry* f = FindFile(name);
+    WString meta = !f ? WString(L"NOT IN WORK")
+                      : f->size == 0 ? L"EMPTY / " + FormatShortStamp(f->modified)
+                                     : FormatThousands(f->size) + L" B / " + FormatShortStamp(f->modified);
+    int split = PreviewSplit(row);
+    RECT r = { row.left, row.top + S(8), split - S(12), row.top + S(26) };
+    DrawLabel(dc, g_fonts.mono, kWhite, name, r, DT_LEFT | DT_VCENTER);
+    r = { row.left, row.top + S(28), split - S(12), row.top + S(44) };
+    DrawLabel(dc, g_fonts.label, kFaint, meta.c_str(), r, DT_LEFT | DT_VCENTER, Tracking());
+    r = { split, row.top + S(8), row.right, row.bottom - S(4) };
+    DrawLabel(dc, g_fonts.body, kSecondary, action, r, DT_LEFT | DT_TOP | DT_WORDBREAK);
+    RECT rule = { row.left, row.bottom - 1, row.right, row.bottom };
+    Fill(dc, rule, kRule);
+}
+
+static void PaintPreview(HDC dc)
+{
+    const Layout& l = g.lay;
+    bool vo = PreviewVo(), reuse = IsThemedChecked(g.reuseCheck);
+    DrawLabel(dc, g_fonts.label, kFaint, vo ? L"NEW VO SESSION / NOT STARTED" : L"NEW SESSION / NOT STARTED",
+              l.header, DT_LEFT | DT_VCENTER, Tracking());
+
+    Fill(dc, l.tile, kTile1);
+    if (!l.compact)
+        DrawLabel(dc, g_fonts.number, kNumber, L"01", l.number, DT_LEFT | DT_TOP, -S(2));
+    DrawLabel(dc, g_fonts.title, kWhite, L"Prepare WORK", l.title, DT_LEFT | DT_TOP);
+    if (reuse && l.warning.right == l.warning.left) {  // no room for the warning box
+        WString age = TraceAgeText(false);
+        DrawLabel(dc, g_fonts.label, kWarn, (L"ONLY IF YOU'RE 100% SURE / TRACE FROM " + age).c_str(), l.status,
+                  DT_LEFT | DT_TOP | DT_END_ELLIPSIS, Tracking());
+    } else {
+        DrawLabel(dc, g_fonts.label, kAccent,
+                  StartClearsFiles() ? L"NOTHING IN WORK CHANGES UNTIL SAVE AND CLEAR"
+                                     : L"NOTHING TO CLEAR / START WHEN YOU'RE READY",
+                  l.status, DT_LEFT | DT_TOP | DT_END_ELLIPSIS, Tracking());
+    }
+
+    const RECT& b = l.body;
+    RECT r = { b.left, l.typeMan.bottom + S(2), b.right, l.typeMan.bottom + S(24) };
+    DrawLabel(dc, g_fonts.body, kSecondary,
+              vo ? L"Code from the vehicle order with SG_CODIEREN, then see what changed."
+                 : L"Edit in NCS Dummy, code the exported MAN, then verify the read-back.",
+              r, DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
+
+    RECT rule = { b.left, l.files[0].top, b.right, l.files[0].top + 1 };
+    Fill(dc, rule, kRule);
+    PaintPreviewFile(dc, l.files[0], kTrcName, PreviewAction(0));
+    PaintPreviewFile(dc, l.files[1], kManName, PreviewAction(1));
+
+    if (l.warning.right > l.warning.left) {
+        const RECT& box = l.warning;
+        DashedFrame(dc, box, kWarn);
+        if (l.fullWarning) {
+            r = { box.left + S(14), box.top + S(10), box.right - S(14), box.top + S(26) };
+            DrawLabel(dc, g_fonts.label, kWarn, L"ONLY IF YOU'RE 100% SURE", r, DT_LEFT | DT_VCENTER, Tracking());
+            r = { box.left + S(14), box.top + S(30), box.right - S(14), box.bottom - S(4) };
+            DrawLabel(dc, g_fonts.body, kText, ReuseWarningText().c_str(), r, DT_LEFT | DT_TOP | DT_WORDBREAK);
+        } else {
+            r = { box.left + S(14), box.top, box.right - S(14), box.bottom };
+            DrawLabel(dc, g_fonts.label, kWarn, (L"ONLY IF YOU'RE 100% SURE / WRITTEN " + TraceAgeText(false)).c_str(),
+                      r, DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS, Tracking());
+        }
+    }
+
+    // What comes after, for the type picked.
+    static const wchar_t* const kManNext = L"02 READ   03 EDIT   04 REVIEW   05 CODE   06 VERIFY   07 FINISH";
+    static const wchar_t* const kVoNext = L"02 READ   03 CODE FROM THE VO   04 READ BACK   05 SEE WHAT CHANGED";
+    Fill(dc, l.strip, kTile3);
+    r = { l.strip.left + S(20), l.strip.top, l.strip.left + S(72), l.strip.bottom };
+    DrawLabel(dc, g_fonts.label, kFaint, L"NEXT", r, DT_LEFT | DT_VCENTER, Tracking());
+    r = { l.strip.left + S(72), l.strip.top, l.strip.right - S(20), l.strip.bottom };
+    DrawLabel(dc, g_fonts.label, kDisabled, vo ? kVoNext : kManNext, r, DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS,
+              Tracking());
+
+    RECT link = BlockLinkRect(l.backupDir);
+    PaintPathBlock(dc, l.backupDir, L"SESSION FOLDER / A NEW FOLDER PER SESSION",
+                   g.backupDir.empty() ? WString() : SessionsRoot(g.backupDir), L"Not set.", link.left - S(12));
 }
 
 // ---------------------------------------------------------------------------
@@ -1263,6 +1678,8 @@ static void PaintMain(HDC dc, const RECT& client)
     Fill(dc, client, kPage);
     if (InSession())
         PaintSession(dc);
+    else if (g.previewing)
+        PaintPreview(dc);
     else
         PaintIdle(dc);
 
@@ -1280,7 +1697,7 @@ static void PaintMain(HDC dc, const RECT& client)
     DrawLabel(dc, g_fonts.label, headColor, head, l.panelHead, DT_LEFT | DT_VCENTER, Tracking());
     RECT link = BlockLinkRect(l.workDir);
     PaintPathBlock(dc, l.workDir, L"WORK FOLDER", g.workDir, L"", link.left - S(12));
-    if (InSession())
+    if (Busy())
         DrawLabel(dc, g_fonts.label, kFaint, L"IN USE", link, DT_RIGHT | DT_VCENTER, Tracking());
 
     RECT rule = { l.footer.left, l.footer.top, l.footer.right, l.footer.top + 1 };
@@ -1297,6 +1714,8 @@ static void PaintMain(HDC dc, const RECT& client)
         statusColor = kWarn;
     } else if (InSession()) {
         lstrcpynW(status, FooterStatus().c_str(), 96);
+    } else if (g.previewing) {
+        lstrcpyW(status, L"NEW SESSION / NOTHING CHANGED YET");
     } else if (g.watch != INVALID_HANDLE_VALUE) {
         wsprintfW(status, L"%d FILE%s / UPDATES AUTOMATICALLY", n, n == 1 ? L"" : L"S");
     } else {
@@ -1414,6 +1833,8 @@ static void SessionChanged()
             same += L" (" + g.session.vehicle + L")";
         SetWindowTextW(g.checks[0], same.c_str());
         SetWindowTextW(g.checks[1], (L"Same ECU picked in NCS Expert: " + g.session.module).c_str());
+        SetWindowTextW(g.checks[2], IsVo() ? L"VO loaded from the CAS, with the options you want"
+                                           : L"NCS Expert profile codes from FSW_PSW.MAN (manipulation)");
     }
     LayoutChildren();
     if (was != SESSION_AWAITING_ECU && g.session.state == SESSION_AWAITING_ECU)
@@ -1456,9 +1877,11 @@ static bool ChooseBackupDir();
 static void SetWorkDir(const WString& raw);
 static void Refresh(bool force);
 
+// START SESSION: step 01 in the column, showing what will happen to WORK.
+// Nothing is created or changed until SAVE AND CLEAR (ConfirmStart).
 static void StartSession()
 {
-    if (InSession())
+    if (Busy())
         return;
     if (g.folderState != FOLDER_OK) {
         Message(L"WORK folder not available",
@@ -1474,21 +1897,49 @@ static void StartSession()
                                            L". Finish or cancel it there first.");
         return;
     }
-    bool reuse = false;
-    if (!RunPrepareDialog(g.hwnd, g.workDir, g.backupDir, &reuse)) {
-        CloseHandle(g.lock);
-        g.lock = NULL;
-        LayoutChildren();  // the backup folder may have changed
+    bool vo = ReadSetting(L"SessionType") == L"VO";
+    SetThemedCheck(g.typeMan, !vo);
+    SetThemedCheck(g.typeVo, vo);
+    SetThemedCheck(g.reuseCheck, false);
+    g.previewing = true;
+    Refresh(true);
+    LayoutChildren();
+    SetFocus(g.secondary);  // changes files: CANCEL has the focus, so a stray Enter doesn't start
+}
+
+static void CancelPreview()
+{
+    if (!g.previewing)
+        return;
+    g.previewing = false;
+    CloseHandle(g.lock);
+    g.lock = NULL;
+    LayoutChildren();
+    SetFocus(g.startButton);
+}
+
+// SAVE AND CLEAR (or START): the session is created and WORK prepared.
+static void ConfirmStart()
+{
+    if (!g.previewing)
+        return;
+    if (g.folderState != FOLDER_OK) {
+        Message(L"WORK folder not available",
+                L"Workbench can't read " + g.workDir + L". Nothing was changed. Check the WORK folder, or cancel.");
         return;
     }
-    WString e = CreateSession(&g.session, SessionsRoot(g.backupDir), g.workDir, reuse);
+    if (g.backupDir.empty() && !ChooseBackupDir())
+        return;
+    bool reuse = IsThemedChecked(g.reuseCheck) && CanReuseTrace();
+    SessionType type = PreviewVo() ? SESSION_TYPE_VO : SESSION_TYPE_MAN;
+    WriteSetting(L"SessionType", type == SESSION_TYPE_VO ? L"VO" : L"MAN");
+    WString e = CreateSession(&g.session, SessionsRoot(g.backupDir), g.workDir, reuse, type);
     if (!e.empty()) {
         InitSession(&g.session);
-        CloseHandle(g.lock);
-        g.lock = NULL;
         Message(L"Couldn't start the session", e + L" Nothing in WORK was changed.");
         return;
     }
+    g.previewing = false;  // the lock carries over to the session
     PrepareWorkspace(&g.session);  // an error stays on the tile, with RETRY
     EnterSession();
     Refresh(true);
@@ -1568,9 +2019,11 @@ static void PrepareReadbackFlow()
 {
     ConfirmSpec spec;
     spec.caption = L"Prepare the read-back";
-    spec.label = L"06 / READ BACK";
+    spec.label = IsVo() ? L"04 / READ BACK" : L"06 / READ BACK";
     spec.title = L"Prepare the read-back";
-    spec.body = L"Then run CODIERDATEN_LESEN for the same ECU in NCS Expert. Nothing else in WORK is touched.";
+    spec.body = IsVo() ? L"Then run CODIERDATEN_LESEN for the same ECU in NCS Expert. The read-back is compared with "
+                         L"the first read. Nothing else in WORK is touched."
+                       : L"Then run CODIERDATEN_LESEN for the same ECU in NCS Expert. Nothing else in WORK is touched.";
     spec.rows.push_back(WorkRow(kTrcName, L"Saved to the session folder, then deleted so the read-back is clearly new.",
                                 L"Nothing to do."));
     spec.rows.push_back(WorkRow(kManName, L"Saved to the session folder, then emptied so nothing gets coded twice "
@@ -1585,6 +2038,27 @@ static void PrepareReadbackFlow()
     PrepareReadback(&g.session);
     SessionChanged();
     Refresh(true);
+}
+
+// VO, before coding: NCS Expert would code a MAN in WORK on top of the VO.
+static void EmptyManFlow()
+{
+    ConfirmSpec spec;
+    spec.caption = L"Empty FSW_PSW.MAN";
+    spec.label = L"03 / CODE FROM THE VO";
+    spec.title = L"Empty FSW_PSW.MAN?";
+    spec.body = L"NCS Expert codes a non-empty FSW_PSW.MAN on top of the vehicle order. Nothing else in WORK is "
+                L"touched.";
+    spec.rows.push_back(WorkRow(kManName, L"Saved to the session folder, then emptied to 0 B.", L"Nothing to do."));
+    spec.okText = L"SAVE AND EMPTY";
+    spec.okKind = BUTTON_DANGER;
+    spec.cancelText = L"CANCEL";
+    spec.focusOk = false;
+    if (!RunConfirmDialog(g.hwnd, spec))
+        return;
+    EmptyWorkMan(&g.session);
+    Refresh(true);
+    SessionChanged();
 }
 
 static void FinishFlow()
@@ -1702,6 +2176,10 @@ static void OnPrimary()
 
 static void OnSecondary()
 {
+    if (g.previewing) {
+        CancelPreview();
+        return;
+    }
     Session& s = g.session;
     switch (s.state) {
     case SESSION_AWAITING_ECU:
@@ -1763,6 +2241,17 @@ static void OnLink(int i)
     case SESSION_CODED:
         FinishFlow();
         break;
+    case SESSION_CODING:
+        if (IsVo())
+            EmptyManFlow();
+        break;
+    case SESSION_VERIFYING: {
+        const Snapshot* before = LastSnapshot(s, SNAP_READ);
+        const Snapshot* after = LastSnapshot(s, SNAP_READBACK);
+        if (IsVo() && before && after)
+            RunCompareDialog(g.hwnd, SnapshotPath(s, *before), SnapshotPath(s, *after), true);
+        break;
+    }
     default:
         break;
     }
@@ -1800,6 +2289,8 @@ static void Refresh(bool force)
         EnableWindow(g.toolButtons[1], man && man->size > 0);
         EnableWindow(g.toolButtons[2], g.canCompare);
         EnableWindow(g.startButton, state == FOLDER_OK);
+        if (Busy())
+            LayoutChildren();  // VO: EMPTY MAN comes and goes with the MAN's size; step 01's buttons
         InvalidateRect(g.hwnd, NULL, FALSE);
     } else if (watchChanged) {
         InvalidateRect(g.hwnd, &g.lay.footer, FALSE);
@@ -1847,7 +2338,7 @@ static void RecordBackup(const WString& path, bool fromEmptyMan)
 
 static void StartBackup()
 {
-    if (!FindFile(kTrcName) || InSession())
+    if (!FindFile(kTrcName) || Busy())
         return;
     // No default backup folder: ask for one the first time.
     if ((g.backupDir.empty() || !DirExists(g.backupDir)) && !ChooseBackupDir())
@@ -1863,7 +2354,7 @@ static void StartBackup()
 static void StartEmptyMan()
 {
     const FileEntry* man = FindFile(kManName);
-    if (!man || man->size == 0 || InSession())
+    if (!man || man->size == 0 || Busy())
         return;
     // The MAN is always backed up first, so a backup folder is required.
     if ((g.backupDir.empty() || !DirExists(g.backupDir)) && !ChooseBackupDir())
@@ -1924,8 +2415,14 @@ static void CreateControls()
     SetWindowTextW(g.checks[4], L"Charger on, ignition on, cable stable");
     for (int i = 0; i < kLinkCount; ++i)
         g.links[i] = CreateThemedButton(g.hwnd, IDC_LINK1 + i, L"", BUTTON_LINK, kTile1);
+    g.typeMan = CreateThemedButton(g.hwnd, IDC_TYPE_MAN, L"MAN", BUTTON_CHECK, kTile1);
+    g.typeVo = CreateThemedButton(g.hwnd, IDC_TYPE_VO, L"VO", BUTTON_CHECK, kTile1);
+    g.reuseCheck = CreateThemedButton(g.hwnd, IDC_REUSE, L"Use this FSW_PSW.TRC as the first read and skip step 02",
+                                      BUTTON_CHECK, kTile1);
     g.secondary = CreateThemedButton(g.hwnd, IDC_SECONDARY, L"", BUTTON_SECONDARY, kTile1);
     g.primary = CreateThemedButton(g.hwnd, IDC_PRIMARY, L"", BUTTON_PRIMARY, kTile1);
+    g.startDanger = CreateThemedButton(g.hwnd, IDC_START_CONFIRM, L"SAVE AND CLEAR", BUTTON_DANGER, kTile1);
+    g.startPlain = CreateThemedButton(g.hwnd, IDC_START_CONFIRM, L"START", BUTTON_PRIMARY, kTile1);
 
     g.showBackup = CreateThemedButton(g.hwnd, IDC_SHOW_BACKUP, L"SHOW LAST", BUTTON_LINK, kPage);
     g.backupDirButton = CreateThemedButton(g.hwnd, IDC_BACKUP_DIR, L"CHANGE", BUTTON_LINK, kPage);
@@ -2070,6 +2567,22 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             return 0;
         }
         switch (id) {
+        case IDC_TYPE_MAN:
+        case IDC_TYPE_VO:
+            SetThemedCheck(g.typeMan, id == IDC_TYPE_MAN);
+            SetThemedCheck(g.typeVo, id == IDC_TYPE_VO);
+            LayoutChildren();  // the actions' text, and so the rows' height, changes
+            return 0;
+        case IDC_REUSE:
+            SetThemedCheck(g.reuseCheck, !IsThemedChecked(g.reuseCheck));
+            LayoutChildren();
+            return 0;
+        case IDC_START_CONFIRM:
+            ConfirmStart();
+            return 0;
+        case IDCANCEL:  // Esc
+            CancelPreview();
+            return 0;
         case IDC_START:
             StartSession();
             return 0;
@@ -2092,7 +2605,7 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             StartEmptyMan();
             return 0;
         case IDC_COMPARE:
-            if (g.canCompare && !InSession())
+            if (g.canCompare && !Busy())
                 RunCompareDialog(hwnd, JoinPath(g.workDir, kTrcName), JoinPath(g.workDir, kManName));
             return 0;
         case IDC_SHOW_BACKUP:
@@ -2105,7 +2618,7 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             ShowTranslationsSettings();
             return 0;
         case IDC_EXPLORER: {
-            if (InSession())
+            if (Busy())
                 return 0;
             unsigned before = TranslationsGeneration();
             RunExplorerDialog(hwnd, g.workDir);
@@ -2119,7 +2632,7 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             ChooseBackupDir();
             return 0;
         case IDC_WORK_DIR: {
-            if (InSession())
+            if (Busy())
                 return 0;
             WString dir = PickFolder(hwnd, L"Choose the NCS Expert WORK folder.", g.workDir);
             if (!dir.empty())

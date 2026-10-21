@@ -26,7 +26,8 @@ static const wchar_t* const kStateNames[] = {
 static const wchar_t* const kKindNames[] = { L"before-trc", L"before-man", L"read",     L"dummy",
                                              L"man",        L"work-trc",   L"work-man", L"readback" };
 static const wchar_t* const kOutcomeNames[] = { L"", L"verified", L"discrepancies", L"unverified", L"cancelled",
-                                                L"failed" };
+                                                L"failed", L"read-back" };
+static const wchar_t* const kTypeNames[] = { L"MAN", L"VO" };
 
 // ---------------------------------------------------------------------------
 // Basics
@@ -67,11 +68,40 @@ int SessionStage(SessionState state)
     }
 }
 
+int SessionStage(const Session& s)
+{
+    int stage = SessionStage(s.state);
+    if (s.type != SESSION_TYPE_VO)
+        return stage;
+    // VO has no edit and review: 01 prepare, 02 read, 03 code, 04 read back, 05 changes.
+    switch (s.state) {
+    case SESSION_CODING:
+        return 3;
+    case SESSION_CODED:
+    case SESSION_AWAITING_READBACK:
+        return 4;
+    default:
+        return stage <= 2 ? stage : 5;
+    }
+}
+
+int StageCount(SessionType type)
+{
+    return type == SESSION_TYPE_VO ? 5 : 7;
+}
+
+int LastTileStage(SessionType type)
+{
+    return type == SESSION_TYPE_VO ? 5 : 6;
+}
+
 const wchar_t* OutcomeText(Outcome outcome)
 {
     switch (outcome) {
     case OUTCOME_VERIFIED:
         return L"VERIFIED";
+    case OUTCOME_READ_BACK:
+        return L"READ BACK";
     case OUTCOME_DISCREPANCIES:
         return L"DISCREPANCIES";
     case OUTCOME_UNVERIFIED:
@@ -516,6 +546,7 @@ bool SaveSession(Session* s)
                 L"[session]\r\n";
     PutInt(&t, L"version", 1);
     Put(&t, L"id", s->id);
+    Put(&t, L"type", kTypeNames[s->type]);
     Put(&t, L"state", kStateNames[s->state]);
     Put(&t, L"work", s->workDir);
     Put(&t, L"started", FormatIsoTime(s->started));
@@ -645,6 +676,8 @@ bool LoadSession(const WString& dir, Session* s)
             continue;
         if (key == L"id") {
             s->id = value;
+        } else if (key == L"type") {
+            s->type = value == L"VO" ? SESSION_TYPE_VO : SESSION_TYPE_MAN;
         } else if (key == L"state") {
             int st = Lookup(kStateNames, value);
             s->state = st < 0 ? SESSION_NONE : (SessionState)st;
@@ -745,7 +778,8 @@ static WString WrongState()
     return L"That step isn't available at this point of the session.";
 }
 
-WString CreateSession(Session* s, const WString& sessionsRoot, const WString& workDir, bool reuseTrc)
+WString CreateSession(Session* s, const WString& sessionsRoot, const WString& workDir, bool reuseTrc,
+                      SessionType type)
 {
     InitSession(s);
     WString parent = sessionsRoot.substr(0, sessionsRoot.size() - FileNameOf(sessionsRoot).size());
@@ -774,6 +808,7 @@ WString CreateSession(Session* s, const WString& sessionsRoot, const WString& wo
         s->dir = dir;
         s->workDir = workDir;
         s->reuseTrc = reuseTrc;
+        s->type = type;
         s->state = SESSION_PREPARING;
         s->waitFrom = 1;
         if (!SaveSession(s)) {
@@ -874,6 +909,14 @@ static Settled Settle(FileWatch* w, const WString& path, const wchar_t* name, DW
 
 static void UpdateVerification(Session* s)
 {
+    if (s->type == SESSION_TYPE_VO) {
+        SessionChanges c;
+        if (LoadChanges(*s, &c)) {
+            s->hasVerify = true;
+            s->changes = c.changes;
+        }
+        return;
+    }
     SessionVerification v;
     if (LoadVerification(*s, &v)) {
         s->hasVerify = true;
@@ -981,7 +1024,8 @@ bool PollSession(Session* s, DWORD now)
     case SESSION_AWAITING_MAN:
     case SESSION_REVIEWING:
     case SESSION_CODING:
-        PollMan(s, now);
+        if (s->type == SESSION_TYPE_MAN)  // VO takes no export; ConfirmCoded checks the MAN is empty
+            PollMan(s, now);
         break;
     default:
         break;
@@ -1015,7 +1059,7 @@ WString ConfirmEcu(Session* s, const WString& chassis, const WString& daten, con
                               L"-FSW_PSW.TRC");
     if (!e.empty())
         return Fail(s, e);
-    s->state = SESSION_AWAITING_MAN;
+    s->state = s->type == SESSION_TYPE_VO ? SESSION_CODING : SESSION_AWAITING_MAN;
     s->manWatch = FileWatch();
     s->notice.clear();
     return Commit(s);
@@ -1089,14 +1133,42 @@ WString ReadyToCode(Session* s)
 
 WString BackToReview(Session* s)
 {
-    if (s->state != SESSION_CODING)
+    if (s->state != SESSION_CODING || s->type != SESSION_TYPE_MAN)
         return WrongState();
     s->state = SESSION_REVIEWING;
     return Commit(s);
 }
 
+// Saves a non-empty WORK MAN as `kind`, then empties it if it's still the saved content.
+static WString SaveAndEmptyMan(Session* s, SnapKind kind)
+{
+    bool exists;
+    String sha;
+    WString e = ArchiveWorkFile(s, kManName, kind, false, &exists, &sha, NULL);
+    if (e.empty() && exists && !IsWorkFileEmpty(*s, kManName))
+        e = EmptyIfUnchanged(WorkPath(*s, kManName), true, sha, kManName);
+    return e;
+}
+
+// VO: NCS Expert codes a non-empty MAN on top of the VO.
+static WString ConfirmVoCoded(Session* s)
+{
+    String data;
+    DWORD err = ReadLocked(WorkPath(*s, kManName), &data);
+    if (err && !IsMissing(err))
+        return Fail(s, ReadError(kManName, err));
+    if (!err && !data.empty())
+        return Fail(s, L"FSW_PSW.MAN in WORK isn't empty, and NCS Expert codes it on top of the VO. Empty it, then "
+                       L"run SG_CODIEREN (again, if you already coded with it).");
+    GetLocalTime(&s->codedAt);
+    s->state = SESSION_CODED;
+    return Commit(s);
+}
+
 WString ConfirmCoded(Session* s)
 {
+    if (s->type == SESSION_TYPE_VO)
+        return s->state == SESSION_CODING ? ConfirmVoCoded(s) : WrongState();
     const Snapshot* reviewed = FindSnapshot(*s, s->reviewed);
     if (s->state != SESSION_CODING || !reviewed)
         return WrongState();
@@ -1109,12 +1181,22 @@ WString ConfirmCoded(Session* s)
     return Commit(s);
 }
 
+WString EmptyWorkMan(Session* s)
+{
+    if (s->state != SESSION_CODING || s->type != SESSION_TYPE_VO)
+        return WrongState();
+    WString e = SaveAndEmptyMan(s, SNAP_WORK_MAN);
+    if (!e.empty())
+        return Fail(s, e);
+    return Commit(s);
+}
+
 WString PrepareReadback(Session* s)
 {
     if (s->state != SESSION_CODED && s->state != SESSION_VERIFYING)
         return WrongState();
     const Snapshot* coded = FindSnapshot(*s, s->coded);
-    if (!coded || !SnapshotIntact(*s, *coded))
+    if (s->type == SESSION_TYPE_MAN && (!coded || !SnapshotIntact(*s, *coded)))
         return Fail(s, L"The coded MAN's copy in the session folder is missing or changed, so WORK wasn't "
                        L"touched. Check the session folder.");
     WString e = ClearWork(s, SNAP_WORK_TRC, SNAP_WORK_MAN, false, false);
@@ -1129,6 +1211,18 @@ WString PrepareReadback(Session* s)
 
 bool OutcomeAllowed(const Session& s, Outcome outcome)
 {
+    if (s.type == SESSION_TYPE_VO) {
+        switch (outcome) {
+        case OUTCOME_READ_BACK:
+            return s.hasVerify;
+        case OUTCOME_UNVERIFIED:
+            return !s.hasVerify;
+        case OUTCOME_FAILED:
+            return true;
+        default:
+            return false;
+        }
+    }
     switch (outcome) {
     case OUTCOME_VERIFIED:
         return s.hasVerify && s.verify.mismatch == 0 && s.verify.unverifiable == 0;
@@ -1147,6 +1241,8 @@ Outcome DerivedOutcome(const Session& s)
 {
     if (!s.hasVerify)
         return OUTCOME_UNVERIFIED;
+    if (s.type == SESSION_TYPE_VO)
+        return OUTCOME_READ_BACK;
     return s.verify.mismatch || s.verify.unverifiable ? OUTCOME_DISCREPANCIES : OUTCOME_VERIFIED;
 }
 
@@ -1157,11 +1253,7 @@ WString FinishSession(Session* s, Outcome outcome, bool emptyMan)
     if (!OutcomeAllowed(*s, outcome))
         return Fail(s, L"That outcome doesn't fit the read-back results.");
     if (emptyMan) {
-        bool exists;
-        String sha;
-        WString e = ArchiveWorkFile(s, kManName, SNAP_WORK_MAN, false, &exists, &sha, NULL);
-        if (e.empty() && exists && !IsWorkFileEmpty(*s, kManName))
-            e = EmptyIfUnchanged(WorkPath(*s, kManName), true, sha, kManName);
+        WString e = SaveAndEmptyMan(s, SNAP_WORK_MAN);
         if (!e.empty())
             return Fail(s, e);
     }
@@ -1223,6 +1315,25 @@ bool LoadVerification(const Session& s, SessionVerification* v)
     ScanTrace(readback.data(), readback.size(), &v->readback);
     v->rows = VerifyReadback(diff, ParseTrace(readback.data(), readback.size()), v->readback.conflicting, &v->summary);
     v->loaded = true;
+    return true;
+}
+
+bool LoadChanges(const Session& s, SessionChanges* c)
+{
+    *c = SessionChanges();
+    String before, after;
+    if (!ReadSnapshot(s, LastSnapshot(s, SNAP_READ), &before) ||
+        !ReadSnapshot(s, LastSnapshot(s, SNAP_READBACK), &after))
+        return false;
+    ScanTrace(before.data(), before.size(), &c->before);
+    ScanTrace(after.data(), after.size(), &c->after);
+    c->rows = DiffTrace(ParseTrace(before.data(), before.size()), ParseTrace(after.data(), after.size()),
+                        &c->summary);
+    c->summary.partialMan = false;  // both are full reads: a function missing from either is news
+    const DiffSummary& d = c->summary;
+    c->changes = d.changed + d.onlyTrc + d.onlyMan;
+    c->fewShared = (d.same + d.changed) * 2 < d.same + d.changed + d.onlyTrc;
+    c->loaded = true;
     return true;
 }
 

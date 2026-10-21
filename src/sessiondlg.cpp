@@ -11,7 +11,7 @@
 
 static const wchar_t kDialogClass[] = L"NcsWorkbenchSessionDialog";
 
-enum { IDC_OK = 100, IDC_CANCEL_BUTTON, IDC_REUSE = 110, IDC_CHANGE_FOLDER, IDC_EMPTY_MAN, IDC_OPTION = 120 };
+enum { IDC_OK = 100, IDC_CANCEL_BUTTON, IDC_EMPTY_MAN = 112, IDC_OPTION = 120 };
 
 const wchar_t* StageTitle(int stage)
 {
@@ -24,6 +24,15 @@ const wchar_t* StageTitle(int stage)
                                              L"Read back and verify",
                                              L"Finish" };
     return stage >= 0 && stage <= 7 ? titles[stage] : L"";
+}
+
+const wchar_t* StageTitle(SessionType type, int stage)
+{
+    if (type != SESSION_TYPE_VO)
+        return StageTitle(stage);
+    static const wchar_t* const titles[] = { L"", L"Prepare WORK", L"Read the ECU", L"Code from the VO",
+                                             L"Read back", L"See what changed" };
+    return stage >= 0 && stage <= 5 ? titles[stage] : L"";
 }
 
 WString FormatAge(const FILETIME& ft)
@@ -56,6 +65,8 @@ WString SessionResultText(const Session& s)
 {
     if (IsSessionOpen(s.state))
         return L"IN PROGRESS";
+    if (s.type == SESSION_TYPE_VO && s.outcome == OUTCOME_UNVERIFIED)
+        return L"NOT READ BACK";
     return OutcomeText(s.outcome);
 }
 
@@ -65,6 +76,7 @@ COLORREF SessionResultColor(const Session& s)
         return kAccent;
     switch (s.outcome) {
     case OUTCOME_VERIFIED:
+    case OUTCOME_READ_BACK:
         return kGood;
     case OUTCOME_DISCREPANCIES:
     case OUTCOME_FAILED:
@@ -79,6 +91,11 @@ COLORREF SessionResultColor(const Session& s)
 WString SessionEcuText(const Session& s)
 {
     return s.module.empty() ? WString(L"ECU NOT CONFIRMED") : s.daten + L" / " + s.module;
+}
+
+WString SessionTitleText(const Session& s)
+{
+    return s.type == SESSION_TYPE_VO ? SessionEcuText(s) + L" / VO" : SessionEcuText(s);
 }
 
 void OpenInNotepad(const WString& path)
@@ -315,133 +332,6 @@ void RunMessageDialog(HWND owner, const WString& caption, const WString& label, 
 }
 
 // ---------------------------------------------------------------------------
-// Prepare WORK
-
-struct PrepareData {
-    WString workDir;
-    WString* backupDir;
-    bool hasTrc, hasMan;
-    ULONGLONG trcSize, manSize;
-    FILETIME trcTime, manTime;
-    HWND reuse, change;
-};
-
-static bool CanReuse(const PrepareData* p)
-{
-    return p->hasTrc && p->trcSize > 0;
-}
-
-static void PaintPrepare(Dlg* d, HDC dc, int w, int h)
-{
-    PrepareData* p = (PrepareData*)d->data;
-    int pad = S(24);
-    PaintHeader(dc, w, L"01 / PREPARE", L"Prepare the WORK folder",
-                p->workDir + L" / NOTHING ELSE IN WORK IS TOUCHED", kMuted);
-
-    bool reuse = p->reuse && IsThemedChecked(p->reuse);
-    const wchar_t* trcAction = !p->hasTrc ? L"Not in WORK. Nothing to do."
-                               : reuse    ? L"Saved to the session folder and kept as the first read."
-                                          : L"Saved to the session folder, then deleted so the next read is "
-                                            L"clearly new.";
-    const wchar_t* manAction = !p->hasMan        ? L"Not in WORK. Created empty, so NCS Expert codes nothing "
-                                                   L"by accident."
-                               : p->manSize == 0 ? L"Already empty. Saved to the session folder as a record."
-                                                 : L"Saved to the session folder, then emptied to 0 B so NCS "
-                                                   L"Expert codes nothing by accident.";
-    int y = S(114);
-    PaintFileRow(dc, pad, w - pad, y, L"FSW_PSW.TRC", FileMeta(p->hasTrc, p->trcSize, p->trcTime), trcAction,
-                 kSecondary);
-    y += S(61);
-    PaintFileRow(dc, pad, w - pad, y, L"FSW_PSW.MAN", FileMeta(p->hasMan, p->manSize, p->manTime), manAction,
-                 kSecondary);
-    y += S(61);
-
-    if (CanReuse(p)) {
-        y += S(46);  // the checkbox
-        RECT box = { pad + S(28), y, w - pad, y + S(104) };
-        DashedFrame(dc, box, kWarn);
-        RECT r = { box.left + S(14), box.top + S(10), box.right - S(14), box.top + S(26) };
-        DrawLabel(dc, g_fonts.label, kWarn, L"ONLY IF YOU'RE 100% SURE", r, DT_LEFT | DT_VCENTER, Tracking());
-        SYSTEMTIME utc, local;
-        FileTimeToSystemTime(&p->trcTime, &utc);
-        SystemTimeToTzSpecificLocalTime(NULL, &utc, &local);
-        WString age = FormatAge(p->trcTime);
-        CharLowerBuffW(&age[0], (DWORD)age.size());
-        WString text = L"This trace was written at " + FormatClock(local) + L" (" + age +
-                       L"). Use it only if it was read from this car and this ECU and nothing was coded since. "
-                       L"A stale trace makes every comparison after it wrong.";
-        r ={ box.left + S(14), box.top + S(30), box.right - S(14), box.bottom - S(6) };
-        DrawLabel(dc, g_fonts.body, kText, text.c_str(), r, DT_LEFT | DT_TOP | DT_WORDBREAK);
-        y = box.bottom;
-    }
-
-    y += S(16);
-    RECT r = { pad, y, w - pad - S(96), y + S(16) };
-    DrawLabel(dc, g_fonts.label, kFaint, L"SESSION FOLDER / A NEW FOLDER PER SESSION", r, DT_LEFT | DT_VCENTER,
-              Tracking());
-    r = { pad, y + S(20), w - pad - S(96), y + S(42) };
-    DrawLabel(dc, g_fonts.body, kWhite, SessionsRoot(*p->backupDir).c_str(), r,
-              DT_LEFT | DT_VCENTER | DT_PATH_ELLIPSIS);
-    PaintFooter(d, dc, w, h, y + S(52));
-}
-
-static void PrepareCommand(Dlg* d, int id, int code)
-{
-    PrepareData* p = (PrepareData*)d->data;
-    (void)code;
-    if (id == IDC_REUSE) {
-        SetThemedCheck(p->reuse, !IsThemedChecked(p->reuse));
-        InvalidateRect(d->hwnd, NULL, FALSE);
-    } else if (id == IDC_CHANGE_FOLDER) {
-        WString dir = PickFolder(d->hwnd, L"Choose the folder where backups and sessions are saved.", *p->backupDir);
-        if (!dir.empty()) {
-            *p->backupDir = dir;
-            WriteSetting(L"BackupDir", dir);
-            InvalidateRect(d->hwnd, NULL, FALSE);
-        }
-    } else if (id == IDC_OK || id == IDC_CANCEL_BUTTON) {
-        Close(d, id);
-    }
-}
-
-bool RunPrepareDialog(HWND owner, const WString& workDir, WString& backupDir, bool* reuseTrc)
-{
-    PrepareData p = {};
-    p.workDir = workDir;
-    p.backupDir = &backupDir;
-    p.hasTrc = ProbeFile(JoinPath(workDir, L"FSW_PSW.TRC"), &p.trcSize, &p.trcTime);
-    p.hasMan = ProbeFile(JoinPath(workDir, L"FSW_PSW.MAN"), &p.manSize, &p.manTime);
-    bool destructive = p.hasTrc || (p.hasMan && p.manSize > 0);
-
-    Dlg d = {};
-    d.paint = PaintPrepare;
-    d.command = PrepareCommand;
-    d.data = &p;
-    int w = 560, h = CanReuse(&p) ? 600 : 470;
-    HWND hwnd = OpenDialog(owner, &d, L"Start a session", w, h);
-    if (!hwnd)
-        return false;
-    int pad = S(24), y = S(114) + 2 * S(61);
-    if (CanReuse(&p)) {
-        p.reuse = CreateThemedButton(hwnd, IDC_REUSE, L"Use this FSW_PSW.TRC as the first read and skip step 02",
-                                     BUTTON_CHECK, kPage);
-        RECT r = { pad, y + S(12), S(w) - pad, y + S(38) };
-        Place(p.reuse, r);
-        y += S(46) + S(104);
-    }
-    y += S(16);
-    p.change = CreateThemedButton(hwnd, IDC_CHANGE_FOLDER, L"CHANGE", BUTTON_LINK, kPage);
-    RECT link = { S(w) - pad - S(80), y + S(18), S(w) - pad, y + S(42) };
-    Place(p.change, link);
-    CreateButtons(&d, destructive ? L"SAVE AND CLEAR" : L"START", destructive ? BUTTON_DANGER : BUTTON_PRIMARY, 200,
-                  L"CANCEL", 160);
-    // Changes files: Cancel has focus, so a stray Enter doesn't start.
-    RunModal(owner, hwnd, d.cancel, &d.done);
-    *reuseTrc = p.reuse && IsThemedChecked(p.reuse);
-    return d.result == IDC_OK;
-}
-
-// ---------------------------------------------------------------------------
 // Unfinished session
 
 struct WorkFileState {
@@ -536,11 +426,11 @@ RecoverChoice RunRecoverDialog(HWND owner, const Session& s)
     SYSTEMTIME last = s.started;
     if (!s.snaps.empty())
         last = s.snaps.back().taken;
-    WString ecu = s.module.empty() ? WString(L"ECU NOT CONFIRMED") : s.daten + L" / " + s.module;
-    int stage = SessionStage(s.state);
+    int stage = SessionStage(s);
     wchar_t stageText[8];
     wsprintfW(stageText, L"%02d", stage);
-    r.line = ecu + L" / STOPPED AT " + stageText + L" " + Upper(StageTitle(stage)) + L" / " + FormatDay(last);
+    r.line = SessionTitleText(s) + L" / STOPPED AT " + stageText + L" " + Upper(StageTitle(s.type, stage)) + L" / " +
+             FormatDay(last);
 
     Dlg d = {};
     d.paint = PaintRecover;
@@ -559,11 +449,24 @@ RecoverChoice RunRecoverDialog(HWND owner, const Session& s)
 static const Outcome kOptions[] = { OUTCOME_VERIFIED, OUTCOME_DISCREPANCIES, OUTCOME_UNVERIFIED, OUTCOME_FAILED };
 static const wchar_t* const kOptionText[] = { L"Completed and verified", L"Completed with discrepancies",
                                               L"Completed without verification", L"Failed" };
+static const Outcome kVoOptions[] = { OUTCOME_READ_BACK, OUTCOME_UNVERIFIED, OUTCOME_FAILED };
+static const wchar_t* const kVoOptionText[] = { L"Coded and read back", L"Coded without a read-back", L"Failed" };
 static const int kOptionCount = 4;
+
+static int OptionCount(const Session& s)
+{
+    return s.type == SESSION_TYPE_VO ? 3 : kOptionCount;
+}
+
+static Outcome OptionOutcome(const Session& s, int i)
+{
+    return s.type == SESSION_TYPE_VO ? kVoOptions[i] : kOptions[i];
+}
 
 struct FinishData {
     Session* s;
     SessionVerification v;
+    SessionChanges c;  // VO
     HWND options[kOptionCount];
     HWND emptyMan;
     bool manHasData;
@@ -603,7 +506,8 @@ static void PaintFinish(Dlg* d, HDC dc, int w, int h)
     wsprintfW(changes, L" / %d CHANGE%s", s.changes, s.changes == 1 ? L"" : L"S");
     WString line = (s.vehicle.empty() ? WString() : Upper(s.vehicle) + L" / ") + FormatDay(s.started) + L" TO " +
                    FormatClock(now) + changes;
-    PaintHeader(dc, w, L"07 / FINISH", ecu, line, kMuted);
+    bool vo = s.type == SESSION_TYPE_VO;
+    PaintHeader(dc, w, vo ? L"05 / FINISH / VO CODING" : L"07 / FINISH", ecu, line, kMuted);
 
     int y = S(124);
     if (s.hasVerify) {
@@ -611,6 +515,16 @@ static void PaintFinish(Dlg* d, HDC dc, int w, int h)
         const wchar_t* labels[] = { L"MATCH", L"MISMATCH", L"CAN'T VERIFY" };
         COLORREF colors[] = { kGood, kBad, kWarn };
         int counts[] = { s.verify.match, s.verify.mismatch, s.verify.unverifiable };
+        if (vo) {
+            labels[0] = L"CHANGED";
+            labels[1] = L"ONLY BEFORE";
+            labels[2] = L"ONLY AFTER";
+            colors[0] = kAccent;
+            colors[1] = kWarn;
+            counts[0] = f->c.summary.changed;
+            counts[1] = f->c.summary.onlyTrc;
+            counts[2] = f->c.summary.onlyMan;
+        }
         for (int i = 0; i < 3; ++i) {
             RECT t = { pad + i * (tile + gap), y, pad + i * (tile + gap) + tile, y + S(58) };
             Fill(dc, t, kTile1);
@@ -627,8 +541,10 @@ static void PaintFinish(Dlg* d, HDC dc, int w, int h)
         RECT c = { t.left + S(14), t.top + S(10), t.right - S(14), t.top + S(26) };
         DrawLabel(dc, g_fonts.label, kWarn, L"NO READ-BACK", c, DT_LEFT | DT_VCENTER, Tracking());
         c = { t.left + S(14), t.top + S(28), t.right - S(14), t.bottom - S(6) };
-        DrawLabel(dc, g_fonts.body, kSecondary, L"Nothing was read back after coding, so no value is verified.", c,
-                  DT_LEFT | DT_VCENTER);
+        DrawLabel(dc, g_fonts.body, kSecondary,
+                  vo ? L"Nothing was read back after coding, so what changed isn't known."
+                     : L"Nothing was read back after coding, so no value is verified.",
+                  c, DT_LEFT | DT_VCENTER);
     }
     y += S(64);
     if (!f->issue.empty()) {
@@ -643,7 +559,12 @@ static void PaintFinish(Dlg* d, HDC dc, int w, int h)
     const Snapshot* files[] = { LastSnapshot(s, SNAP_READ), FindSnapshot(s, s.coded ? s.coded : s.reviewed),
                                 LastSnapshot(s, SNAP_READBACK) };
     const wchar_t* kinds[] = { L"ORIGINAL", L"CODED MAN", L"READ-BACK" };
-    for (int i = 0; i < 3; ++i) {
+    if (vo) {  // no MAN: two rows
+        kinds[0] = L"FIRST READ";
+        kinds[1] = L"READ-BACK";
+        files[1] = files[2];
+    }
+    for (int i = 0; i < (vo ? 2 : 3); ++i) {
         c = { pad, y, pad + S(110), y + S(22) };
         DrawLabel(dc, g_fonts.label, kFaint, kinds[i], c, DT_LEFT | DT_VCENTER, Tracking());
         c = { pad + S(120), y, w - pad, y + S(22) };
@@ -653,14 +574,16 @@ static void PaintFinish(Dlg* d, HDC dc, int w, int h)
             DrawLabel(dc, g_fonts.label, kFaint, L"NONE", c, DT_LEFT | DT_VCENTER, Tracking());
         y += S(22);
     }
+    if (vo)
+        y += S(22);  // the options sit where they do for MAN
 
     y += S(14);
     c = { pad, y, w - pad, y + S(16) };
     DrawLabel(dc, g_fonts.label, kFaint, L"OUTCOME", c, DT_LEFT | DT_VCENTER, Tracking());
     y += S(20);
-    for (int i = 0; i < kOptionCount; ++i) {
-        WString hint = OptionHint(f, kOptions[i]);
-        bool allowed = OutcomeAllowed(s, kOptions[i]);
+    for (int i = 0; i < OptionCount(s); ++i) {
+        WString hint = OptionHint(f, OptionOutcome(s, i));
+        bool allowed = OutcomeAllowed(s, OptionOutcome(s, i));
         COLORREF color = !allowed ? kDisabled : hint == L"FROM THE RESULTS" || hint == L"NO READ-BACK" ? kAccent : kFaint;
         c = { w - pad - S(240), y, w - pad, y + S(28) };
         DrawLabel(dc, g_fonts.label, color, hint.c_str(), c, DT_RIGHT | DT_VCENTER, Tracking());
@@ -679,16 +602,17 @@ static void FinishCommand(Dlg* d, int id, int code)
 {
     FinishData* f = (FinishData*)d->data;
     (void)code;
-    if (id >= IDC_OPTION && id < IDC_OPTION + kOptionCount) {
-        for (int i = 0; i < kOptionCount; ++i)
+    int count = OptionCount(*f->s);
+    if (id >= IDC_OPTION && id < IDC_OPTION + count) {
+        for (int i = 0; i < count; ++i)
             SetThemedCheck(f->options[i], i == id - IDC_OPTION);
     } else if (id == IDC_EMPTY_MAN) {
         SetThemedCheck(f->emptyMan, !IsThemedChecked(f->emptyMan));
     } else if (id == IDC_OK) {
         Outcome chosen = OUTCOME_NONE;
-        for (int i = 0; i < kOptionCount; ++i) {
+        for (int i = 0; i < count; ++i) {
             if (IsThemedChecked(f->options[i]))
-                chosen = kOptions[i];
+                chosen = OptionOutcome(*f->s, i);
         }
         if (chosen == OUTCOME_NONE) {
             d->error = L"Pick an outcome first.";
@@ -712,6 +636,15 @@ bool RunFinishDialog(HWND owner, Session* s)
     FinishData f = {};
     f.s = s;
     LoadVerification(*s, &f.v);
+    if (s->type == SESSION_TYPE_VO && LoadChanges(*s, &f.c)) {
+        if (f.c.fewShared) {
+            f.issue = L"The read-back shares few functions with the first read. Was it the same ECU?";
+            f.issueColor = kWarn;
+        } else if (f.c.changes == 0) {
+            f.issue = L"The read-back matches the first read: the VO coding changed nothing.";
+            f.issueColor = kText;
+        }
+    }
     for (size_t i = 0; f.v.loaded && i < f.v.rows.size() && f.issue.empty(); ++i) {
         const VerifyRow& row = f.v.rows[i];
         if (row.status == VERIFY_MISMATCH) {
@@ -742,12 +675,13 @@ bool RunFinishDialog(HWND owner, Session* s)
     // Rows as painted: header 124, tiles 64, issue 28, files 20 + 66, gap 14, label 20.
     int y = S(124) + S(64) + S(28) + S(20) + 3 * S(22) + S(14) + S(20);
     Outcome derived = DerivedOutcome(*s);
-    for (int i = 0; i < kOptionCount; ++i) {
-        f.options[i] = CreateThemedButton(hwnd, IDC_OPTION + i, kOptionText[i], BUTTON_CHECK, kPage);
+    for (int i = 0; i < OptionCount(*s); ++i) {
+        const wchar_t* text = s->type == SESSION_TYPE_VO ? kVoOptionText[i] : kOptionText[i];
+        f.options[i] = CreateThemedButton(hwnd, IDC_OPTION + i, text, BUTTON_CHECK, kPage);
         RECT r = { pad, y, S(w) - pad - S(250), y + S(28) };
         Place(f.options[i], r);
-        EnableWindow(f.options[i], OutcomeAllowed(*s, kOptions[i]));
-        SetThemedCheck(f.options[i], kOptions[i] == derived);
+        EnableWindow(f.options[i], OutcomeAllowed(*s, OptionOutcome(*s, i)));
+        SetThemedCheck(f.options[i], OptionOutcome(*s, i) == derived);
         y += S(30);
     }
     y += S(10);

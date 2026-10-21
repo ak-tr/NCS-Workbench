@@ -39,6 +39,7 @@ struct HistoryDialog {
     WString root;
     std::vector<Session> sessions;
     int selected;
+    bool vo;  // the selected session is VO: Function | Before | After | Result
     HistoryFile files[kFileSlots];
     int fileCount;
     std::vector<HistoryRow> rows;
@@ -78,13 +79,15 @@ static RECT FileRowRect(const Rects& r, int i)
     return row;
 }
 
-// Function | Original | To code | Read back | Result.
-static void ColumnEdges(const RECT& table, int edges[5])
+// Function | Original | To code | Read back | Result. VO has no "to code":
+// Function | Before | After | Result, with the third column empty.
+static void ColumnEdges(const RECT& table, bool vo, int edges[5])
 {
     int width = table.right - table.left;
     static const int pct[5] = { 0, 32, 50, 68, 84 };
+    static const int voPct[5] = { 0, 38, 61, 61, 84 };
     for (int i = 0; i < 5; ++i)
-        edges[i] = table.left + width * pct[i] / 100;
+        edges[i] = table.left + width * (vo ? voPct[i] : pct[i]) / 100;
 }
 
 static void LayoutDialog(HistoryDialog* d)
@@ -125,7 +128,37 @@ static void Select(HistoryDialog* d, int index)
     d->fileCount = 0;
     d->rows.clear();
     d->rowsNote.clear();
-    if (index >= 0 && index < (int)d->sessions.size()) {
+    d->vo = index >= 0 && index < (int)d->sessions.size() && d->sessions[index].type == SESSION_TYPE_VO;
+    if (d->vo) {
+        const Session& s = d->sessions[index];
+        AddFile(d, L"BEFORE TRC", LastSnapshot(s, SNAP_BEFORE_TRC));
+        AddFile(d, L"BEFORE MAN", LastSnapshot(s, SNAP_BEFORE_MAN));
+        AddFile(d, L"FIRST READ", LastSnapshot(s, SNAP_READ));
+        AddFile(d, L"FOR NCS DUMMY", LastSnapshot(s, SNAP_DUMMY));
+        AddFile(d, L"WORK MAN", LastSnapshot(s, SNAP_WORK_MAN));  // emptied before coding or a read-back
+        AddFile(d, L"READ-BACK", LastSnapshot(s, SNAP_READBACK));
+        SessionChanges c;
+        if (LoadChanges(s, &c)) {
+            for (size_t i = 0; i < c.rows.size(); ++i) {
+                const DiffRow& row = c.rows[i];
+                if (row.status == DIFF_SAME)
+                    continue;
+                HistoryRow h;
+                h.name = row.name;
+                h.original = row.trc;
+                h.readback = row.man;
+                h.result = row.status == DIFF_CHANGED    ? L"CHANGED"
+                           : row.status == DIFF_ONLY_TRC ? L"ONLY BEFORE"
+                                                         : L"ONLY AFTER";
+                h.color = row.status == DIFF_CHANGED ? kAccent : kWarn;
+                d->rows.push_back(h);
+            }
+            if (d->rows.empty())
+                d->rowsNote = L"The read-back matches the first read: the VO coding changed nothing.";
+        } else {
+            d->rowsNote = L"Not read back after coding, so what changed isn't known.";
+        }
+    } else if (index >= 0 && index < (int)d->sessions.size()) {
         const Session& s = d->sessions[index];
         AddFile(d, L"BEFORE TRC", LastSnapshot(s, SNAP_BEFORE_TRC));
         AddFile(d, L"BEFORE MAN", LastSnapshot(s, SNAP_BEFORE_MAN));
@@ -220,7 +253,7 @@ static void PaintDialog(HDC dc, const RECT& client)
     t = { right - resultWidth, S(44), right, S(74) };
     DrawLabel(dc, g_fonts.label, SessionResultColor(s), result.c_str(), t, DT_RIGHT | DT_VCENTER, Tracking());
     t = { left, S(44), right - resultWidth - S(16), S(74) };
-    DrawLabel(dc, g_fonts.heading, kWhite, SessionEcuText(s).c_str(), t, DT_LEFT | DT_VCENTER);
+    DrawLabel(dc, g_fonts.heading, kWhite, SessionTitleText(s).c_str(), t, DT_LEFT | DT_VCENTER);
 
     WString line;
     if (!s.vehicle.empty())
@@ -255,7 +288,8 @@ static void PaintDialog(HDC dc, const RECT& client)
     }
 
     t = { left, r.tableHeader.top - S(22), right, r.tableHeader.top - S(6) };
-    DrawLabel(dc, g_fonts.label, kFaint, L"CHANGES AND READ-BACK", t, DT_LEFT | DT_VCENTER, Tracking());
+    DrawLabel(dc, g_fonts.label, kFaint, d->vo ? L"WHAT THE VO CODING CHANGED" : L"CHANGES AND READ-BACK", t,
+              DT_LEFT | DT_VCENTER, Tracking());
     Fill(dc, r.tableHeader, kTile1);
     RECT table = r.tableHeader;
     if (IsWindowVisible(d->rowList)) {
@@ -264,9 +298,16 @@ static void PaintDialog(HDC dc, const RECT& client)
         table.right = table.left + lc.right;
     }
     int edges[5];
-    ColumnEdges(table, edges);
+    ColumnEdges(table, d->vo, edges);
     const wchar_t* heads[5] = { L"FUNCTION", L"ORIGINAL", L"TO CODE", L"READ BACK", L"RESULT" };
+    if (d->vo) {
+        heads[1] = L"BEFORE";
+        heads[2] = NULL;
+        heads[3] = L"AFTER";
+    }
     for (int i = 0; i < 5; ++i) {
+        if (!heads[i])
+            continue;
         int cl = i == 0 ? edges[0] + S(14) : edges[i];
         int cr = i == 4 ? table.right - S(12) : edges[i + 1] - S(10);
         RECT c = { cl, r.tableHeader.top, cr, r.tableHeader.bottom };
@@ -299,7 +340,7 @@ static LRESULT SessionCustomDraw(HistoryDialog* d, NMLVCUSTOMDRAW* cd)
         DrawLabel(dc, g_fonts.label, SessionResultColor(s), SessionResultText(s).c_str(), c, DT_RIGHT | DT_VCENTER,
                   Tracking());
         c = { rc.left + S(16), rc.top + S(26), rc.right - S(12), rc.bottom - S(6) };
-        DrawLabel(dc, g_fonts.mono, kWhite, SessionEcuText(s).c_str(), c, DT_LEFT | DT_VCENTER);
+        DrawLabel(dc, g_fonts.mono, kWhite, SessionTitleText(s).c_str(), c, DT_LEFT | DT_VCENTER);
         if ((state & LVIS_FOCUSED) && GetFocus() == d->sessionList)
             Frame(dc, rc, kAccent);
         return CDRF_SKIPDEFAULT;
@@ -326,12 +367,14 @@ static LRESULT RowCustomDraw(HistoryDialog* d, NMLVCUSTOMDRAW* cd)
         RECT rule = { rc.left, rc.bottom - 1, rc.right, rc.bottom };
         Fill(dc, rule, kTile1);
         int edges[5];
-        ColumnEdges(rc, edges);
+        ColumnEdges(rc, d->vo, edges);
         RECT c = { edges[0] + S(14), rc.top, edges[1] - S(10), rc.bottom };
         DrawKeyword(dc, row.name, c, kWhite);
         const std::vector<String>* cells[3] = { &row.original, &row.intended, &row.readback };
         COLORREF colors[3] = { kSecondary, kAccent, row.color };
         for (int i = 0; i < 3; ++i) {
+            if (d->vo && i == 1)
+                continue;  // no "to code"
             c = { edges[i + 1], rc.top, edges[i + 2] - S(10), rc.bottom };
             if (cells[i]->empty())
                 DrawLabel(dc, g_fonts.mono, colors[i], L"-", c, DT_LEFT | DT_VCENTER);
@@ -433,13 +476,19 @@ static LRESULT CALLBACK DialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             WString text;
             if (nm->idFrom == IDC_SESSIONS && item.iItem >= 0 && item.iItem < (int)d->sessions.size()) {
                 const Session& s = d->sessions[item.iItem];
-                text = FormatDay(s.started) + L", " + SessionEcuText(s) + L", " + SessionResultText(s);
+                text = FormatDay(s.started) + L", " + SessionTitleText(s) + L", " + SessionResultText(s);
             } else if (nm->idFrom == IDC_ROWS && item.iItem >= 0 && item.iItem < (int)d->rows.size()) {
                 const HistoryRow& row = d->rows[item.iItem];
                 WString none = L"-";
-                text = SpokenKeyword(row.name) + L": " + (row.original.empty() ? none : SpokenValues(row.original)) +
-                       L" to " + SpokenValues(row.intended) + L", read back " +
-                       (row.readback.empty() ? none : SpokenValues(row.readback)) + L", " + row.result;
+                if (d->vo)
+                    text = SpokenKeyword(row.name) + L": before " +
+                           (row.original.empty() ? none : SpokenValues(row.original)) + L", after " +
+                           (row.readback.empty() ? none : SpokenValues(row.readback)) + L", " + row.result;
+                else
+                    text = SpokenKeyword(row.name) + L": " +
+                           (row.original.empty() ? none : SpokenValues(row.original)) + L" to " +
+                           SpokenValues(row.intended) + L", read back " +
+                           (row.readback.empty() ? none : SpokenValues(row.readback)) + L", " + row.result;
             }
             if ((item.mask & LVIF_TEXT) && !text.empty())
                 lstrcpynW(item.pszText, text.c_str(), item.cchTextMax);

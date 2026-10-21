@@ -311,6 +311,7 @@ static void TestFullSession()
     Session loaded;
     assert(LoadSession(s.dir, &loaded));
     assert(loaded.state == SESSION_VERIFYING && loaded.id == s.id && loaded.workDir == e.work);
+    assert(loaded.type == SESSION_TYPE_MAN);
     assert(loaded.chassis == L"E91" && loaded.daten == L"E89" && loaded.module == L"MK60_87.C0A");
     assert(loaded.vehicle == L"PZ12345" && loaded.reviewed == s.reviewed && loaded.coded == s.coded);
     assert(loaded.snaps.size() == s.snaps.size() && loaded.changes == 3 && loaded.hasVerify);
@@ -370,6 +371,78 @@ static void TestCancel()
     RemoveTree(e.root);
 }
 
+// VO coding: no MAN export or review; the read-back is compared with the first read.
+static void TestVoSession()
+{
+    // After SG_CODIEREN: V_EINHEIT changed, HSA gone, a new function.
+    static const char kVoReadback[] = "SZL\r\n\twert_07\r\nC0A_V_EINHEIT\r\n\twert_02\r\nC0A_DF_DIR\r\n\twert_00\r\n"
+                                      "\twert_02\r\nC0A_NEU\r\n\twert_01\r\n";
+    Env e = MakeEnv(L"vo");
+    WriteText(Man(e), kMan1);  // left over from an earlier edit
+    Session s;
+    assert(CreateSession(&s, e.sessions, e.work, false, SESSION_TYPE_VO).empty());
+    assert(s.type == SESSION_TYPE_VO && StageCount(s.type) == 5 && LastTileStage(s.type) == 5);
+    assert(PrepareWorkspace(&s).empty());
+    assert(SizeOf(Man(e)) == 0 && SnapText(s, LastSnapshot(s, SNAP_BEFORE_MAN)) == kMan1);
+    WriteText(Trc(e), kTrc);
+    Settle(&s);
+    assert(s.state == SESSION_AWAITING_ECU && SessionStage(s) == 2);
+    assert(ConfirmEcu(&s, L"E91", L"E89", L"MK60_87.C0A", L"").empty());
+    assert(s.state == SESSION_CODING && SessionStage(s) == 3);
+    assert(!BackToReview(&s).empty() && s.state == SESSION_CODING);
+
+    // A MAN exported meanwhile isn't taken as an export, and blocks "I have coded".
+    WriteText(Man(e), kMan2);
+    Settle(&s);
+    assert(s.state == SESSION_CODING && CountSnapshots(s, SNAP_MAN) == 0);
+    assert(!ConfirmCoded(&s).empty() && s.state == SESSION_CODING && !s.error.empty());
+    assert(EmptyWorkMan(&s).empty() && s.error.empty());
+    assert(SizeOf(Man(e)) == 0 && SnapText(s, LastSnapshot(s, SNAP_WORK_MAN)) == kMan2);
+    DeleteFileW(Man(e).c_str());  // a missing MAN is fine too
+    assert(ConfirmCoded(&s).empty());
+    assert(s.state == SESSION_CODED && SessionStage(s) == 4 && HasTime(s.codedAt));
+    assert(OutcomeAllowed(s, OUTCOME_UNVERIFIED) && !OutcomeAllowed(s, OUTCOME_READ_BACK));
+    assert(!OutcomeAllowed(s, OUTCOME_VERIFIED) && !OutcomeAllowed(s, OUTCOME_DISCREPANCIES));
+
+    assert(PrepareReadback(&s).empty());
+    assert(s.state == SESSION_AWAITING_READBACK && SessionStage(s) == 4);
+    assert(!FileExists(Trc(e)) && SizeOf(Man(e)) == 0);
+    WriteText(Trc(e), kVoReadback);
+    Settle(&s);
+    assert(s.state == SESSION_VERIFYING && SessionStage(s) == 5 && s.hasVerify && s.changes == 3);
+    SessionChanges c;
+    assert(LoadChanges(s, &c) && c.changes == 3 && !c.fewShared);
+    assert(c.summary.changed == 1 && c.summary.onlyTrc == 1 && c.summary.onlyMan == 1 && c.summary.same == 2);
+    assert(c.rows[1].name == "C0A_V_EINHEIT" && c.rows[1].status == DIFF_CHANGED);
+    assert(c.rows[2].name == "C0A_HSA" && c.rows[2].status == DIFF_ONLY_TRC);
+    assert(c.rows[4].name == "C0A_NEU" && c.rows[4].status == DIFF_ONLY_MAN);
+    SessionVerification v;
+    assert(!LoadVerification(s, &v));  // nothing intended to verify against
+    assert(DerivedOutcome(s) == OUTCOME_READ_BACK && !OutcomeAllowed(s, OUTCOME_UNVERIFIED));
+    assert(!FinishSession(&s, OUTCOME_VERIFIED, false).empty() && s.state == SESSION_VERIFYING);
+
+    // Read back again, from another ECU by mistake: few functions in common.
+    assert(PrepareReadback(&s).empty());
+    WriteText(Trc(e), "A_EINS\r\n\twert_01\r\nA_ZWEI\r\n\twert_01\r\nSZL\r\n\twert_07\r\n");
+    Settle(&s);
+    assert(LoadChanges(s, &c) && c.fewShared && s.changes == c.changes);
+
+    Session loaded;
+    assert(LoadSession(s.dir, &loaded) && loaded.type == SESSION_TYPE_VO && loaded.changes == s.changes);
+    assert(FinishSession(&loaded, OUTCOME_READ_BACK, true).empty());
+    assert(LoadSession(s.dir, &loaded) && loaded.state == SESSION_COMPLETED && loaded.outcome == OUTCOME_READ_BACK);
+
+    // A record from before session types is a MAN session.
+    WString ini = JoinPath(s.dir, L"session.ini");
+    String text = ReadText(ini);
+    size_t at = text.find("type=VO\r\n");
+    assert(at != String::npos);
+    text.erase(at, 9);
+    WriteText(ini, text.c_str(), text.size());
+    assert(LoadSession(s.dir, &loaded) && loaded.type == SESSION_TYPE_MAN);
+    RemoveTree(e.root);
+}
+
 static void TestLock()
 {
     HANDLE a = LockWorkDir(L"C:\\NCSEXPER\\WORK");
@@ -396,6 +469,7 @@ int main()
     TestFullSession();
     TestManVanishes();
     TestCancel();
+    TestVoSession();
     TestLock();
     printf("session_test: all passed\n");
     return 0;
