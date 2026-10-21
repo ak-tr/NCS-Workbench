@@ -43,10 +43,19 @@ Outside a session, three manual tools do one job each:
 - **Empty the MAN** for a fresh edit, backing it up first.
 - **Compare TRC with MAN** function by function, with a live count of changes.
 
+### Parameter Explorer
+
+**PARAMETERS** (top right) searches every module file of an SP-Daten chassis for a coding function: pick a chassis, type a keyword (`DIGITAL_V`, `KALTUEBERWACHUNG`) or, with translations loaded, an English word (`window`, `corrected speed`). Each function lists the module files that actually code it, with their ECU family and coding index (`KOMBI / KMBI_PL2.C05 / INDEX 05`), and the values each module offers. It only reads: nothing is coded or changed, and no session is needed. If some module files can't be read, the results say they may be incomplete.
+
+### English names from NCS Dummy
+
+If NCS Dummy's `Translations.csv` sits next to your `NcsDummy.exe`, Workbench shows its English names under the BMW keywords in Compare, the session review and read-back, History and the Parameter Explorer (`BC_DIGITAL_V` / *On-board computer (OBC) digital speed display*). The keywords themselves never change. **TRANSLATIONS** in the footer shows what was loaded, lets you choose another file, reload, hide the names or show them first. The translations are by revtor and contributors and come from your own NCS Dummy; Workbench doesn't ship or change them.
+
 ## Guides
 
 - [Guided coding sessions](docs/guides/guided-sessions.md): every step of a session with screenshots, what can go wrong at each one, the history window and what's saved.
 - [Main window and tools](docs/guides/main-window.md): the home screen, the WORK folder panel and the three manual tools.
+- [Parameter Explorer and English names](docs/guides/parameter-explorer.md): searching an SP-Daten chassis for a function, reading the results, NCS Dummy's translations and their settings, and trying it on a copy of SP-Daten.
 - [Themes](docs/guides/themes.md): the five colour schemes (dark, dim and light) and how to switch between them.
 
 ## Download
@@ -98,6 +107,8 @@ src/            Win32 app (C++17, raw Win32 API, XP-era APIs only)
 src/trace.h     TRC/MAN parser, checks, diff and read-back verification (no Windows headers)
 src/session.*   guided session: state machine, snapshots, WORK changes (no UI)
 src/ncsdata.h   SP-Daten file parser (no Windows headers)
+src/paramindex.h  Parameter Explorer's index and search (no Windows headers)
+src/translations.h  NCS Dummy Translations.csv parser (no Windows headers)
 test/           parser, diff and session tests (the session tests use a mock WORK folder)
 docs/guides/    user guides; screenshots in docs/screenshots/
 samples/        real FSW_PSW.TRC / FSW_PSW.MAN files used by the tests

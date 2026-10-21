@@ -5,6 +5,7 @@
 #pragma once
 
 #include <windows.h>
+#include <commctrl.h>
 
 // Colour schemes, named after BMW interior colours. Dakota Black is the
 // Mosaic look and the default; the others are for readability: two dim
@@ -39,6 +40,7 @@ struct Fonts {
     HFONT title;    // Onest Medium 18
     HFONT body;     // Onest 13
     HFONT heading;  // Onest Medium 22
+    HFONT monoTitle;  // Geist Mono Medium 18, a keyword as a title
 };
 
 extern Fonts g_fonts;
@@ -64,6 +66,17 @@ HWND CreateThemedButton(HWND parent, int id, const wchar_t* text, ButtonKind kin
 void DrawThemedButton(const DRAWITEMSTRUCT* dis);
 void SetThemedCheck(HWND button, bool checked);
 bool IsThemedChecked(HWND button);
+
+// Link buttons draw their text right-aligned, so a link's rectangle is its
+// text: its width, and that rectangle ending at `right`, centred on `cy`.
+int LinkWidth(HWND link);
+RECT RightLink(HWND link, int right, int cy);
+
+// Owner-data report list: no header, one column (FitListColumn sizes it),
+// rows drawn by the parent on NM_CUSTOMDRAW. rowHeight is in pixels (already
+// scaled): set through *rowImages, a 1px-wide image list (the XP-compatible
+// way), which the caller destroys after the list.
+HWND CreateThemedList(HWND parent, int id, COLORREF background, int rowHeight, HIMAGELIST* rowImages);
 
 // Title bar in the scheme's colours: dark on Windows 10 1809+ and 11 for the
 // dark schemes, caption colours on Windows 11; no effect on older systems.

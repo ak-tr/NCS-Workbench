@@ -42,6 +42,7 @@ bool ReadFileBytes(const WString& path, String* out);
 WString PickFolder(HWND owner, const wchar_t* title, const WString& initial);
 // Opens Explorer with the file selected (or the folder, if the file is gone).
 void ShowInExplorer(const WString& path);
+void CopyToClipboard(HWND owner, const WString& text);
 WString SystemErrorText(DWORD code);
 
 WString FormatThousands(ULONGLONG n);  // 12,345 (user's separator)

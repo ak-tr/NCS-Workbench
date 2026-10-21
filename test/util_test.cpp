@@ -9,22 +9,7 @@
 
 #include "../src/util.h"
 
-static void WriteText(const WString& path, const char* text)
-{
-    HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    assert(h != INVALID_HANDLE_VALUE);
-    DWORD written;
-    WriteFile(h, text, (DWORD)strlen(text), &written, NULL);
-    CloseHandle(h);
-}
-
-static String ReadText(const WString& path)
-{
-    String s;
-    bool ok = ReadFileBytes(path, &s);
-    assert(ok);
-    return s;
-}
+#include "testfiles.h"
 
 int main()
 {

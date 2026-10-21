@@ -10,6 +10,7 @@
 #include "session.h"
 #include "sessiondlg.h"
 #include "theme.h"
+#include "transdlg.h"
 #include "util.h"
 
 static const wchar_t kDialogClass[] = L"NcsWorkbenchHistory";
@@ -24,7 +25,9 @@ struct HistoryFile {
 };
 
 struct HistoryRow {
-    WString name, original, intended, readback, result;
+    String name;
+    std::vector<String> original, intended, readback;  // empty shows as "-"
+    WString result;
     COLORREF color;
 };
 
@@ -138,10 +141,10 @@ static void Select(HistoryDialog* d, int index)
             for (size_t i = 0; i < v.rows.size(); ++i) {
                 const VerifyRow& row = v.rows[i];
                 HistoryRow h;
-                h.name = Widen(row.name);
-                h.original = row.original.empty() ? WString(L"-") : Widen(JoinValues(row.original));
-                h.intended = Widen(JoinValues(row.intended));
-                h.readback = row.readback.empty() ? WString(L"-") : Widen(JoinValues(row.readback));
+                h.name = row.name;
+                h.original = row.original;
+                h.intended = row.intended;
+                h.readback = row.readback;
                 h.result = row.status == VERIFY_MATCH      ? L"MATCH"
                            : row.status == VERIFY_MISMATCH ? L"MISMATCH"
                                                            : L"CAN'T VERIFY";
@@ -156,10 +159,9 @@ static void Select(HistoryDialog* d, int index)
                 if (!IsIntendedChange(row))
                     continue;
                 HistoryRow h;
-                h.name = Widen(row.name);
-                h.original = row.trc.empty() ? WString(L"-") : Widen(JoinValues(row.trc));
-                h.intended = Widen(JoinValues(row.man));
-                h.readback = L"-";
+                h.name = row.name;
+                h.original = row.trc;
+                h.intended = row.man;
                 h.result = L"NOT READ BACK";
                 h.color = kFaint;
                 d->rows.push_back(h);
@@ -325,13 +327,18 @@ static LRESULT RowCustomDraw(HistoryDialog* d, NMLVCUSTOMDRAW* cd)
         Fill(dc, rule, kTile1);
         int edges[5];
         ColumnEdges(rc, edges);
-        const WString* cells[4] = { &row.name, &row.original, &row.intended, &row.readback };
-        COLORREF colors[4] = { kWhite, kSecondary, kAccent, row.color == kFaint ? kFaint : row.color };
-        for (int i = 0; i < 4; ++i) {
-            RECT c = { i == 0 ? edges[0] + S(14) : edges[i], rc.top, edges[i + 1] - S(10), rc.bottom };
-            DrawLabel(dc, g_fonts.mono, colors[i], cells[i]->c_str(), c, DT_LEFT | DT_VCENTER);
+        RECT c = { edges[0] + S(14), rc.top, edges[1] - S(10), rc.bottom };
+        DrawKeyword(dc, row.name, c, kWhite);
+        const std::vector<String>* cells[3] = { &row.original, &row.intended, &row.readback };
+        COLORREF colors[3] = { kSecondary, kAccent, row.color };
+        for (int i = 0; i < 3; ++i) {
+            c = { edges[i + 1], rc.top, edges[i + 2] - S(10), rc.bottom };
+            if (cells[i]->empty())
+                DrawLabel(dc, g_fonts.mono, colors[i], L"-", c, DT_LEFT | DT_VCENTER);
+            else
+                DrawValues(dc, *cells[i], c, colors[i]);
         }
-        RECT c = { edges[4], rc.top, rc.right - S(12), rc.bottom };
+        c = { edges[4], rc.top, rc.right - S(12), rc.bottom };
         DrawLabel(dc, g_fonts.label, row.color, row.result.c_str(), c, DT_RIGHT | DT_VCENTER, Tracking());
         if ((state & LVIS_FOCUSED) && GetFocus() == d->rowList)
             Frame(dc, rc, kAccent);
@@ -344,29 +351,10 @@ static LRESULT RowCustomDraw(HistoryDialog* d, NMLVCUSTOMDRAW* cd)
 // ---------------------------------------------------------------------------
 // Window
 
-static HWND CreateList(HistoryDialog* d, int id, COLORREF bg, int rowHeight, HIMAGELIST* images)
-{
-    HWND list = CreateWindowExW(0, WC_LISTVIEWW, L"",
-                                WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_NOCOLUMNHEADER | LVS_SINGLESEL |
-                                    LVS_SHOWSELALWAYS | LVS_OWNERDATA,
-                                0, 0, 0, 0, d->hwnd, (HMENU)(INT_PTR)id, GetModuleHandleW(NULL), NULL);
-    ListView_SetExtendedListViewStyle(list, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
-    ListView_SetBkColor(list, bg);
-    SendMessageW(list, WM_SETFONT, (WPARAM)g_fonts.body, FALSE);
-    *images = ImageList_Create(1, S(rowHeight), ILC_COLOR32, 1, 0);  // sets report row height (XP-safe)
-    ListView_SetImageList(list, *images, LVSIL_SMALL);
-    LVCOLUMNW col = {};
-    col.mask = LVCF_WIDTH;
-    col.cx = S(400);
-    ListView_InsertColumn(list, 0, &col);
-    ApplyThemedControl(list, L"DarkMode_Explorer");
-    return list;
-}
-
 static void CreateDialogControls(HistoryDialog* d)
 {
-    d->sessionList = CreateList(d, IDC_SESSIONS, kPanel, 52, &d->sessionHeight);
-    d->rowList = CreateList(d, IDC_ROWS, kTile3, 30, &d->rowHeight);
+    d->sessionList = CreateThemedList(d->hwnd, IDC_SESSIONS, kPanel, S(52), &d->sessionHeight);
+    d->rowList = CreateThemedList(d->hwnd, IDC_ROWS, kTile3, KeywordRowHeight(30), &d->rowHeight);
     for (int i = 0; i < kFileSlots; ++i)
         d->open[i] = CreateThemedButton(d->hwnd, IDC_OPEN + i, L"OPEN", BUTTON_LINK, kPage);
     d->showFolder = CreateThemedButton(d->hwnd, IDC_SHOW_FOLDER, L"SHOW FOLDER", BUTTON_SECONDARY, kPage);
@@ -448,8 +436,10 @@ static LRESULT CALLBACK DialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 text = FormatDay(s.started) + L", " + SessionEcuText(s) + L", " + SessionResultText(s);
             } else if (nm->idFrom == IDC_ROWS && item.iItem >= 0 && item.iItem < (int)d->rows.size()) {
                 const HistoryRow& row = d->rows[item.iItem];
-                text = row.name + L": " + row.original + L" to " + row.intended + L", read back " + row.readback +
-                       L", " + row.result;
+                WString none = L"-";
+                text = SpokenKeyword(row.name) + L": " + (row.original.empty() ? none : SpokenValues(row.original)) +
+                       L" to " + SpokenValues(row.intended) + L", read back " +
+                       (row.readback.empty() ? none : SpokenValues(row.readback)) + L", " + row.result;
             }
             if ((item.mask & LVIF_TEXT) && !text.empty())
                 lstrcpynW(item.pszText, text.c_str(), item.cchTextMax);

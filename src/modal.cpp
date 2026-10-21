@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include "modal.h"
+#include "resource.h"
 #include "theme.h"
 
 static DWORD ModalStyle(bool resizable)
@@ -45,8 +46,17 @@ HWND CreateModal(HWND owner, const wchar_t* className, WNDPROC proc, const wchar
 
     HWND dialog = CreateWindowExW(WS_EX_DLGMODALFRAME, className, title, style, x, y, w, h, owner, NULL,
                                   inst, param);
-    if (dialog)
-        ApplyThemedFrame(dialog);
+    if (!dialog)
+        return NULL;
+    // The app icon in the title bar: a modal frame shows none unless it's set.
+    // LR_SHARED: loaded once, never destroyed.
+    HICON bigIcon = (HICON)LoadImageW(inst, MAKEINTRESOURCEW(IDI_APP), IMAGE_ICON, GetSystemMetrics(SM_CXICON),
+                                      GetSystemMetrics(SM_CYICON), LR_SHARED);
+    HICON smallIcon = (HICON)LoadImageW(inst, MAKEINTRESOURCEW(IDI_APP), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
+                                        GetSystemMetrics(SM_CYSMICON), LR_SHARED);
+    SendMessageW(dialog, WM_SETICON, ICON_BIG, (LPARAM)bigIcon);
+    SendMessageW(dialog, WM_SETICON, ICON_SMALL, (LPARAM)smallIcon);
+    ApplyThemedFrame(dialog);
     return dialog;
 }
 

@@ -1,6 +1,7 @@
 // Mosaic theme for Win32. See theme.h.
 
 #include <windows.h>
+#include <commctrl.h>
 
 #include "resource.h"
 #include "theme.h"
@@ -200,6 +201,7 @@ void InitTheme()
     g_fonts.title = MakeFont(sansMedium, 18, mediumWeight);
     g_fonts.body = MakeFont(sans, 13, FW_NORMAL);
     g_fonts.heading = MakeFont(sansMedium, 22, mediumWeight);
+    g_fonts.monoTitle = MakeFont(monoMedium, 18, mono ? FW_NORMAL : FW_BOLD);
 
     SetTheme(g_theme);  // also creates g_fieldBrush
     g_dwmapi = LoadSystemDll(L"dwmapi.dll");  // Vista+, absent on XP
@@ -209,7 +211,7 @@ void InitTheme()
 void ShutdownTheme()
 {
     HFONT* fonts[] = { &g_fonts.label, &g_fonts.button, &g_fonts.mono, &g_fonts.number,
-                       &g_fonts.title, &g_fonts.body, &g_fonts.heading };
+                       &g_fonts.title, &g_fonts.body, &g_fonts.heading, &g_fonts.monoTitle };
     for (HFONT* f : fonts) {
         DeleteObject(*f);
         *f = NULL;
@@ -489,6 +491,41 @@ void SetThemedCheck(HWND button, bool checked)
         info->checked = checked;
         InvalidateRect(button, NULL, FALSE);
     }
+}
+
+int LinkWidth(HWND link)
+{
+    wchar_t text[64];
+    GetWindowTextW(link, text, 64);
+    HDC dc = GetDC(link);
+    int w = MeasureLabel(dc, g_fonts.button, text, Tracking());
+    ReleaseDC(link, dc);
+    return w + Tracking() + S(2);
+}
+
+RECT RightLink(HWND link, int right, int cy)
+{
+    RECT r = { right - LinkWidth(link), cy - S(12), right, cy + S(12) };
+    return r;
+}
+
+HWND CreateThemedList(HWND parent, int id, COLORREF background, int rowHeight, HIMAGELIST* rowImages)
+{
+    HWND list = CreateWindowExW(0, WC_LISTVIEWW, L"",
+                                WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_NOCOLUMNHEADER | LVS_SINGLESEL |
+                                    LVS_SHOWSELALWAYS | LVS_OWNERDATA,
+                                0, 0, 0, 0, parent, (HMENU)(INT_PTR)id, GetModuleHandleW(NULL), NULL);
+    ListView_SetExtendedListViewStyle(list, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+    ListView_SetBkColor(list, background);
+    SendMessageW(list, WM_SETFONT, (WPARAM)g_fonts.body, FALSE);
+    *rowImages = ImageList_Create(1, rowHeight, ILC_COLOR32, 1, 0);
+    ListView_SetImageList(list, *rowImages, LVSIL_SMALL);
+    LVCOLUMNW col = {};
+    col.mask = LVCF_WIDTH;
+    col.cx = S(400);
+    ListView_InsertColumn(list, 0, &col);
+    ApplyThemedControl(list, L"DarkMode_Explorer");
+    return list;
 }
 
 bool IsThemedChecked(HWND button)

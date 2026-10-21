@@ -15,12 +15,15 @@
 
 #include "backup.h"
 #include "compare.h"
+#include "explorer.h"
 #include "history.h"
 #include "man.h"
 #include "resource.h"
 #include "session.h"
 #include "sessiondlg.h"
 #include "theme.h"
+#include "transdlg.h"
+#include "translator.h"
 #include "util.h"
 #include "version.h"
 #include "xpstd.h"
@@ -55,6 +58,8 @@ enum {
     IDC_PRIMARY,
     IDC_SECONDARY,
     IDC_THEME,
+    IDC_EXPLORER,
+    IDC_TRANSLATIONS,
     IDC_LINK1,  // IDC_LINK1 .. +2
     IDC_CHECK1 = IDC_LINK1 + 3,
 };
@@ -95,7 +100,7 @@ struct App {
     HWND startButton = NULL, historyButton = NULL;
     HWND showBackup = NULL, backupDirButton = NULL, list = NULL, workDirButton = NULL;
     HWND cancelSession = NULL, primary = NULL, secondary = NULL;
-    HWND themeButton = NULL;
+    HWND themeButton = NULL, translationsButton = NULL, explorerButton = NULL;
     HWND links[kLinkCount] = {};
     HWND checks[kCheckCount] = {};
     HWND lastFocus = NULL;
@@ -461,23 +466,9 @@ static int TextWidth(HFONT font, const wchar_t* text, int tracking)
     return w;
 }
 
-// Link buttons draw their text right-aligned, so a link's rectangle is its text.
-static int LinkWidth(HWND link)
-{
-    wchar_t text[64];
-    GetWindowTextW(link, text, 64);
-    return TextWidth(g_fonts.button, text, Tracking()) + Tracking() + S(2);
-}
-
 static RECT LeftLink(HWND link, int x, int cy)
 {
     RECT r = { x, cy - S(12), x + LinkWidth(link), cy + S(12) };
-    return r;
-}
-
-static RECT RightLink(HWND link, int right, int cy)
-{
-    RECT r = { right - LinkWidth(link), cy - S(12), right, cy + S(12) };
     return r;
 }
 
@@ -583,6 +574,22 @@ static RECT ThemeLinkRect()
     return RightLink(g.themeButton, versionLeft - S(20), (f.top + f.bottom) / 2);
 }
 
+// TRANSLATIONS / ON, left of the theme link.
+static RECT TranslationsLinkRect()
+{
+    const RECT& f = g.lay.footer;
+    return RightLink(g.translationsButton, ThemeLinkRect().left - S(20), (f.top + f.bottom) / 2);
+}
+
+// PARAMETERS in the header, left of HISTORY. Idle only, like the tools: the
+// session isn't polled while a modal is open, and the explorer stays open long.
+static RECT ExplorerLinkRect()
+{
+    const Layout& l = g.lay;
+    return RightLink(g.explorerButton, l.right - LinkWidth(g.historyButton) - S(20),
+                     (l.header.top + l.header.bottom) / 2);
+}
+
 static RECT ShowBackupRect()
 {
     RECT change = BlockLinkRect(g.lay.backupDir);
@@ -610,6 +617,12 @@ static int InstructionLines()
     }
 }
 
+// Review and read-back rows: two lines while translations show.
+static int ReviewRowHeight()
+{
+    return KeywordRowHeight(28);
+}
+
 // The review table and what follows it, inside the body.
 struct ReviewGeometry {
     RECT header;
@@ -624,13 +637,13 @@ static ReviewGeometry ComputeReviewGeometry(int rowCount, bool warning)
     r.header = { b.left, b.top, b.right, b.top + S(26) };
     r.rowTop = r.header.bottom;
     int reserved = S(26) + (warning ? S(42) : 0);
-    int fit = std::max(0, (int)(b.bottom - reserved - r.rowTop) / S(28));
+    int fit = std::max(0, (int)(b.bottom - reserved - r.rowTop) / ReviewRowHeight());
     r.shown = std::min(rowCount, fit);
     if (r.shown < rowCount && r.shown > 0) {
         r.shown -= 1;  // room for the "+N MORE" line
     }
     r.more = rowCount - r.shown;
-    int y = r.rowTop + r.shown * S(28) + (r.more ? S(28) : 0) + S(8);
+    int y = r.rowTop + r.shown * ReviewRowHeight() + (r.more ? ReviewRowHeight() : 0) + S(8);
     r.summary = { b.left, y, b.right, y + S(16) };
     y += S(26);
     r.warning = { b.left, y, b.right, y + S(32) };
@@ -668,6 +681,9 @@ static void LayoutChildren()
     Show(g.workDirButton, !session);  // the session keeps its WORK folder
     Place(g.workDirButton, BlockLinkRect(l.workDir));
     Place(g.themeButton, ThemeLinkRect());
+    Place(g.translationsButton, TranslationsLinkRect());
+    Show(g.explorerButton, !session);
+    Place(g.explorerButton, ExplorerLinkRect());
 
     // Session controls
     StateUi u = UiFor(g.session.state);
@@ -792,7 +808,9 @@ static void PaintPathBlock(HDC dc, const RECT& block, const wchar_t* label, cons
 static void PaintIdle(HDC dc)
 {
     const Layout& l = g.lay;
-    DrawLabel(dc, g_fonts.label, kFaint, L"CODING / SESSIONS", l.header, DT_LEFT | DT_VCENTER, Tracking());
+    RECT head = l.header;
+    head.right = ExplorerLinkRect().left - S(16);
+    DrawLabel(dc, g_fonts.label, kFaint, L"CODING / SESSIONS", head, DT_LEFT | DT_VCENTER, Tracking());
 
     // Start tile
     const RECT& t = l.startTile;
@@ -932,7 +950,7 @@ static void PaintReview(HDC dc)
     int width = b.right - b.left;
     int trcLeft = b.left + width * 46 / 100, manLeft = b.left + width * 73 / 100;
     if (!rows.empty()) {
-        RECT body = { b.left, geo.header.top, b.right, geo.rowTop + geo.shown * S(28) + (geo.more ? S(28) : 0) };
+        RECT body = { b.left, geo.header.top, b.right, geo.rowTop + geo.shown * ReviewRowHeight() + (geo.more ? ReviewRowHeight() : 0) };
         Fill(dc, body, kTile3);
         RECT c = { b.left + S(14), geo.header.top, trcLeft - S(10), geo.header.bottom };
         DrawLabel(dc, g_fonts.label, kFaint, L"FUNCTION", c, DT_LEFT | DT_VCENTER, Tracking());
@@ -945,28 +963,27 @@ static void PaintReview(HDC dc)
     }
     for (int i = 0; i < geo.shown; ++i) {
         const DiffRow& row = g.review.rows[rows[i]];
-        int y = geo.rowTop + i * S(28);
-        RECT bar = { b.left, y, b.left + S(3), y + S(28) };
+        int y = geo.rowTop + i * ReviewRowHeight();
+        RECT bar = { b.left, y, b.left + S(3), y + ReviewRowHeight() };
         Fill(dc, bar, row.status == DIFF_CHANGED ? kAccent : kWarn);
-        RECT rule = { b.left, y + S(28) - 1, b.right, y + S(28) };
+        RECT rule = { b.left, y + ReviewRowHeight() - 1, b.right, y + ReviewRowHeight() };
         Fill(dc, rule, kTile1);
-        RECT c = { b.left + S(14), y, trcLeft - S(10), y + S(28) };
-        DrawLabel(dc, g_fonts.mono, kWhite, Widen(row.name).c_str(), c, DT_LEFT | DT_VCENTER);
-        c = { trcLeft, y, manLeft - S(10), y + S(28) };
+        RECT c = { b.left + S(14), y, trcLeft - S(10), y + ReviewRowHeight() };
+        DrawKeyword(dc, row.name, c, kWhite);
+        c = { trcLeft, y, manLeft - S(10), y + ReviewRowHeight() };
         if (row.status == DIFF_ONLY_MAN)
             DrawLabel(dc, g_fonts.label, kWarn, L"NOT IN TRC", c, DT_LEFT | DT_VCENTER, Tracking());
         else
-            DrawLabel(dc, g_fonts.mono, kText, Widen(JoinValues(row.trc)).c_str(), c, DT_LEFT | DT_VCENTER);
-        c = { manLeft, y, b.right - S(10), y + S(28) };
+            DrawValues(dc, row.trc, c, kText);
+        c = { manLeft, y, b.right - S(10), y + ReviewRowHeight() };
         if (row.status == DIFF_ONLY_TRC)
             DrawLabel(dc, g_fonts.label, kWarn, L"NOT IN MAN", c, DT_LEFT | DT_VCENTER, Tracking());
         else
-            DrawLabel(dc, g_fonts.mono, row.status == DIFF_CHANGED ? kAccent : kText, Widen(JoinValues(row.man)).c_str(),
-                      c, DT_LEFT | DT_VCENTER);
+            DrawValues(dc, row.man, c, row.status == DIFF_CHANGED ? kAccent : kText);
     }
     if (geo.more) {
-        int y = geo.rowTop + geo.shown * S(28);
-        RECT c = { b.left + S(14), y, b.right - S(10), y + S(28) };
+        int y = geo.rowTop + geo.shown * ReviewRowHeight();
+        RECT c = { b.left + S(14), y, b.right - S(10), y + ReviewRowHeight() };
         WString more = L"+" + IntText(geo.more) + L" MORE / COMPARE SHOWS ALL";
         DrawLabel(dc, g_fonts.label, kMuted, more.c_str(), c, DT_LEFT | DT_VCENTER, Tracking());
     }
@@ -1008,7 +1025,7 @@ static void PaintVerification(HDC dc)
         DrawLabel(dc, g_fonts.body, kSecondary, L"The coded MAN changed nothing, so there's nothing to verify.", r,
                   DT_LEFT | DT_VCENTER);
     } else {
-        RECT body = { b.left, geo.header.top, b.right, geo.rowTop + geo.shown * S(28) + (geo.more ? S(28) : 0) };
+        RECT body = { b.left, geo.header.top, b.right, geo.rowTop + geo.shown * ReviewRowHeight() + (geo.more ? ReviewRowHeight() : 0) };
         Fill(dc, body, kTile3);
         const wchar_t* heads[4] = { L"FUNCTION", L"TO CODE", L"READ BACK", L"RESULT" };
         for (int i = 0; i < 4; ++i) {
@@ -1021,28 +1038,28 @@ static void PaintVerification(HDC dc)
     }
     for (int i = 0; i < geo.shown; ++i) {
         const VerifyRow& row = rows[i];
-        int y = geo.rowTop + i * S(28);
+        int y = geo.rowTop + i * ReviewRowHeight();
         COLORREF color = row.status == VERIFY_MATCH ? kGood : row.status == VERIFY_MISMATCH ? kBad : kWarn;
-        RECT rule = { b.left, y + S(28) - 1, b.right, y + S(28) };
+        RECT rule = { b.left, y + ReviewRowHeight() - 1, b.right, y + ReviewRowHeight() };
         Fill(dc, rule, kTile1);
-        RECT c = { edges[0] + S(14), y, edges[1] - S(10), y + S(28) };
-        DrawLabel(dc, g_fonts.mono, kWhite, Widen(row.name).c_str(), c, DT_LEFT | DT_VCENTER);
-        c = { edges[1], y, edges[2] - S(10), y + S(28) };
-        DrawLabel(dc, g_fonts.mono, kText, Widen(JoinValues(row.intended)).c_str(), c, DT_LEFT | DT_VCENTER);
-        c = { edges[2], y, edges[3] - S(10), y + S(28) };
+        RECT c = { edges[0] + S(14), y, edges[1] - S(10), y + ReviewRowHeight() };
+        DrawKeyword(dc, row.name, c, kWhite);
+        c = { edges[1], y, edges[2] - S(10), y + ReviewRowHeight() };
+        DrawValues(dc, row.intended, c, kText);
+        c = { edges[2], y, edges[3] - S(10), y + ReviewRowHeight() };
         if (row.readback.empty())
             DrawLabel(dc, g_fonts.label, kWarn, L"NOT IN TRACE", c, DT_LEFT | DT_VCENTER, Tracking());
         else
-            DrawLabel(dc, g_fonts.mono, color, Widen(JoinValues(row.readback)).c_str(), c, DT_LEFT | DT_VCENTER);
-        c = { edges[3], y, b.right - S(12), y + S(28) };
+            DrawValues(dc, row.readback, c, color);
+        c = { edges[3], y, b.right - S(12), y + ReviewRowHeight() };
         const wchar_t* result = row.status == VERIFY_MATCH      ? L"MATCH"
                                 : row.status == VERIFY_MISMATCH ? L"MISMATCH"
                                                                 : L"CAN'T VERIFY";
         DrawLabel(dc, g_fonts.label, color, result, c, DT_RIGHT | DT_VCENTER, Tracking());
     }
     if (geo.more) {
-        int y = geo.rowTop + geo.shown * S(28);
-        RECT c = { b.left + S(14), y, b.right - S(10), y + S(28) };
+        int y = geo.rowTop + geo.shown * ReviewRowHeight();
+        RECT c = { b.left + S(14), y, b.right - S(10), y + ReviewRowHeight() };
         WString more = L"+" + IntText(geo.more) + L" MORE / SEE HISTORY";
         DrawLabel(dc, g_fonts.label, kMuted, more.c_str(), c, DT_LEFT | DT_VCENTER, Tracking());
     }
@@ -1288,7 +1305,7 @@ static void PaintMain(HDC dc, const RECT& client)
     // Version on the right, so testers can tell builds apart; the theme link sits before it.
     RECT vr = { l.footer.right - S(20) - S(120), l.footer.top, l.footer.right - S(20), l.footer.bottom };
     DrawLabel(dc, g_fonts.label, kFaint, kVersionLabel, vr, DT_RIGHT | DT_VCENTER, Tracking());
-    RECT sr = { l.footer.left + S(20), l.footer.top, ThemeLinkRect().left - S(20), l.footer.bottom };
+    RECT sr = { l.footer.left + S(20), l.footer.top, TranslationsLinkRect().left - S(20), l.footer.bottom };
     DrawLabel(dc, g_fonts.label, statusColor, status, sr, DT_LEFT | DT_VCENTER, Tracking());
 }
 
@@ -1625,6 +1642,8 @@ static bool ChooseNcsDummy()
         return false;
     g.dummyPath = file;
     WriteSetting(L"NcsDummyPath", g.dummyPath);
+    LoadTranslations();  // Translations.csv may be next to it
+    SetWindowTextW(g.translationsButton, TranslationsLinkText().c_str());
     LayoutChildren();
     return true;
 }
@@ -1639,22 +1658,6 @@ static void OpenNcsDummy()
     if ((INT_PTR)r <= 32)
         Message(L"Couldn't start NCS Dummy", L"Windows couldn't start " + g.dummyPath +
                                                  L". Check the path with CHANGE, or start NCS Dummy yourself.");
-}
-
-static void CopyToClipboard(const WString& text)
-{
-    if (!OpenClipboard(g.hwnd))
-        return;
-    EmptyClipboard();
-    size_t bytes = (text.size() + 1) * sizeof(wchar_t);
-    HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (mem) {
-        memcpy(GlobalLock(mem), text.c_str(), bytes);
-        GlobalUnlock(mem);
-        if (!SetClipboardData(CF_UNICODETEXT, mem))
-            GlobalFree(mem);
-    }
-    CloseClipboard();
 }
 
 static WString DummyTracePath()
@@ -1741,7 +1744,7 @@ static void OnLink(int i)
         break;
     case SESSION_AWAITING_MAN:
         if (i == 0)
-            CopyToClipboard(DummyTracePath());
+            CopyToClipboard(g.hwnd, DummyTracePath());
         else if (i == 1)
             ShowInExplorer(DummyTracePath());
         else
@@ -1946,6 +1949,24 @@ static void CreateControls()
     g.workDirButton = CreateThemedButton(g.hwnd, IDC_WORK_DIR, L"CHANGE", BUTTON_LINK, kPanel);
     g.themeButton = CreateThemedButton(g.hwnd, IDC_THEME, L"", BUTTON_LINK, kPage);
     UpdateThemeButton();
+    g.translationsButton =
+        CreateThemedButton(g.hwnd, IDC_TRANSLATIONS, TranslationsLinkText().c_str(), BUTTON_LINK, kPage);
+    g.explorerButton = CreateThemedButton(g.hwnd, IDC_EXPLORER, L"PARAMETERS", BUTTON_LINK, kPage);
+}
+
+// After the translations or how they show changed: the link, the tables.
+static void TranslationsChanged()
+{
+    SetWindowTextW(g.translationsButton, TranslationsLinkText().c_str());
+    LayoutChildren();
+}
+
+static void ShowTranslationsSettings()
+{
+    if (RunTranslationsDialog(g.hwnd)) {
+        g.dummyPath = ReadSetting(L"NcsDummyPath");  // the dialog can choose NCS Dummy too
+        TranslationsChanged();
+    }
 }
 
 // Applies the current theme to the main window: the colours are read at
@@ -2080,6 +2101,20 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         case IDC_THEME:
             ChooseTheme();
             return 0;
+        case IDC_TRANSLATIONS:
+            ShowTranslationsSettings();
+            return 0;
+        case IDC_EXPLORER: {
+            if (InSession())
+                return 0;
+            unsigned before = TranslationsGeneration();
+            RunExplorerDialog(hwnd, g.workDir);
+            if (TranslationsGeneration() != before) {  // changed from inside the explorer
+                g.dummyPath = ReadSetting(L"NcsDummyPath");
+                TranslationsChanged();
+            }
+            return 0;
+        }
         case IDC_BACKUP_DIR:
             ChooseBackupDir();
             return 0;
@@ -2173,6 +2208,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
     g.backupDir = NormalizeDir(ReadSetting(L"BackupDir"));
     g.lastBackup = ReadSetting(L"LastBackup");
     g.dummyPath = ReadSetting(L"NcsDummyPath");
+    LoadTranslations();  // NCS Dummy's English names; nothing changes if there are none
     InitSession(&g.session);
     LoadRecent();
 

@@ -309,3 +309,19 @@ WString FormatFileStamp(const SYSTEMTIME& t)
     wsprintfW(buf, L"%04u%02u%02u-%02u%02u", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute);
     return buf;
 }
+
+void CopyToClipboard(HWND owner, const WString& text)
+{
+    if (!OpenClipboard(owner))
+        return;
+    EmptyClipboard();
+    size_t bytes = (text.size() + 1) * sizeof(wchar_t);
+    HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE, bytes);
+    if (mem) {
+        memcpy(GlobalLock(mem), text.c_str(), bytes);
+        GlobalUnlock(mem);
+        if (!SetClipboardData(CF_UNICODETEXT, mem))
+            GlobalFree(mem);
+    }
+    CloseClipboard();
+}

@@ -129,15 +129,6 @@ static void RememberModule(const WString& module)
 // ---------------------------------------------------------------------------
 // Chassis, modules and detection
 
-static WString FolderForChassis(BackupDialog* d, const WString& chassis)
-{
-    for (size_t i = 0; i < d->chassisList.size(); ++i) {
-        if (lstrcmpiW(d->chassisList[i].first.c_str(), chassis.c_str()) == 0)
-            return d->chassisList[i].second;
-    }
-    return WString();
-}
-
 static void AddItem(HWND combo, const WString& text)
 {
     if (SendMessageW(combo, CB_FINDSTRINGEXACT, (WPARAM)-1, (LPARAM)text.c_str()) == CB_ERR)
@@ -158,7 +149,7 @@ static void FillFallbackModules(BackupDialog* d)
 static void UpdateForChassis(BackupDialog* d)
 {
     WString chassis = SanitizeCode(GetWindowTextString(d->chassis), false);
-    WString folder = FolderForChassis(d, chassis);
+    WString folder = FolderForChassis(d->chassisList, chassis);
     if (d->folderLoaded && lstrcmpiW(folder.c_str(), d->folder.c_str()) == 0)
         return;
     d->folder = folder;
@@ -231,7 +222,7 @@ static Rects DialogRects(int w, int h)
 static bool ReadCodes(BackupDialog* d, WString* chassis, WString* module)
 {
     WString typed = SanitizeCode(GetWindowTextString(d->chassis), false);
-    WString folder = FolderForChassis(d, typed);
+    WString folder = FolderForChassis(d->chassisList, typed);
     *chassis = folder.empty() ? typed : SanitizeCode(folder, false);
     *module = SanitizeCode(GetWindowTextString(d->module), true);
     return !chassis->empty() && !module->empty();
@@ -553,7 +544,8 @@ static LRESULT CALLBACK DialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             if (HIWORD(wParam) == CBN_EDITCHANGE) {
                 d->error.clear();
                 // Only once the typed chassis is a known one: halfway ("E9") would rescan and redetect.
-                if (chassis && !FolderForChassis(d, SanitizeCode(GetWindowTextString(d->chassis), false)).empty())
+                WString typed = SanitizeCode(GetWindowTextString(d->chassis), false);
+                if (chassis && !FolderForChassis(d->chassisList, typed).empty())
                     UpdateForChassis(d);
                 InvalidateRect(hwnd, NULL, FALSE);
             } else if (HIWORD(wParam) == CBN_KILLFOCUS && chassis) {
