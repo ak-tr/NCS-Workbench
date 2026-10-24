@@ -168,40 +168,13 @@ inline int TraceIssueCount(const TraceCheck& c)
 // function listed twice keeps its first occurrence.
 inline std::vector<TraceEntry> ParseTrace(const char* data, size_t size)
 {
-    std::vector<TraceEntry> entries;
-    std::map<String, size_t> seen;
-    bool skipping = false;  // inside a repeated function
-    size_t pos = 0;
-    while (pos < size) {
-        size_t end = pos;
-        while (end < size && data[end] != '\n')
-            ++end;
-        size_t lineEnd = end;
-        if (lineEnd > pos && data[lineEnd - 1] == '\r')
-            --lineEnd;
-
-        size_t first = pos;
-        while (first < lineEnd && IsIndent(data[first]))
-            ++first;
-        size_t last = lineEnd;
-        while (last > first && IsIndent(data[last - 1]))
-            --last;
-
-        if (first < last) {
-            String text(data + first, last - first);
-            if (first == pos) {  // not indented: a function name
-                skipping = seen.count(text) != 0;
-                if (!skipping) {
-                    seen[text] = entries.size();
-                    TraceEntry e;
-                    e.name = text;
-                    entries.push_back(e);
-                }
-            } else if (!entries.empty() && !skipping) {
-                entries.back().values.push_back(text);
-            }
+    std::vector<TraceEntry> all = ScanTrace(data, size, NULL), entries;
+    std::map<String, bool> seen;
+    for (size_t i = 0; i < all.size(); ++i) {
+        if (!seen[all[i].name]) {
+            seen[all[i].name] = true;
+            entries.push_back(all[i]);
         }
-        pos = end + 1;
     }
     return entries;
 }

@@ -739,27 +739,27 @@ bool LoadSession(const WString& dir, Session* s)
     return !s->id.empty() && s->state != SESSION_NONE;
 }
 
-static bool NewerFirst(const Session& a, const Session& b)
-{
-    return a.id > b.id;  // ids are YYYYMMDD-HHMMSS[-n]
-}
-
-std::vector<Session> ListSessions(const WString& sessionsRoot)
+std::vector<Session> ListSessions(const WString& sessionsRoot, size_t limit)
 {
     std::vector<Session> out;
+    std::vector<WString> names;
     WIN32_FIND_DATAW fd;
     HANDLE h = FindFirstFileW(JoinPath(sessionsRoot, L"*").c_str(), &fd);
     if (h == INVALID_HANDLE_VALUE)
         return out;
     do {
-        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || fd.cFileName[0] == L'.')
-            continue;
-        Session s;
-        if (LoadSession(JoinPath(sessionsRoot, fd.cFileName), &s))
-            out.push_back(s);
-    } while (FindNextFileW(h, &fd) && out.size() < 1000);
+        if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && fd.cFileName[0] != L'.')
+            names.push_back(fd.cFileName);
+    } while (FindNextFileW(h, &fd));
     FindClose(h);
-    std::sort(out.begin(), out.end(), NewerFirst);
+    // Folder names are the ids, YYYYMMDD-HHMMSS[-n]: sorted, the newest is last.
+    // Only as many records are read as asked for.
+    std::sort(names.begin(), names.end());
+    for (size_t i = names.size(); i-- > 0 && (!limit || out.size() < limit);) {
+        Session s;
+        if (LoadSession(JoinPath(sessionsRoot, names[i]), &s))
+            out.push_back(s);
+    }
     return out;
 }
 

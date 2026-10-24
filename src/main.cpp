@@ -1827,9 +1827,7 @@ static void LoadRecent()
     g.recent.clear();
     if (g.backupDir.empty())
         return;
-    g.recent = ListSessions(SessionsRoot(g.backupDir));
-    if (g.recent.size() > kRecentCount)
-        g.recent.resize(kRecentCount);
+    g.recent = ListSessions(SessionsRoot(g.backupDir), kRecentCount);
 }
 
 static void Message(const WString& title, const WString& body)
@@ -1896,12 +1894,16 @@ static void EndSession()
 static bool ChooseBackupDir();
 static void SetWorkDir(const WString& raw);
 static void Refresh(bool force);
+static bool CheckUnfinishedSession(bool starting);
 
 // START SESSION: step 01 in the column, showing what will happen to WORK.
 // Nothing is created or changed until SAVE AND CLEAR (ConfirmStart).
 static void StartSession()
 {
     if (Busy())
+        return;
+    // One that couldn't be read at startup (USB stick out) comes first, or it'd be replaced unseen.
+    if (!CheckUnfinishedSession(true) || InSession())
         return;
     if (g.folderState != FOLDER_OK) {
         Message(L"WORK folder not available",
@@ -1965,18 +1967,37 @@ static void ConfirmStart()
     Refresh(true);
 }
 
-// At startup: a session that wasn't finished (crash, closed window, power loss).
-static void CheckUnfinishedSession()
+// At startup, and again before a new session replaces it as the active one: a
+// session that wasn't finished (crash, closed window, power loss). False while
+// it's still pending: open in another window, or unreadable and not let go.
+static bool CheckUnfinishedSession(bool starting)
 {
     WString dir = ReadSetting(L"ActiveSession");
     if (dir.empty())
-        return;
+        return true;
     Session s;
-    if (!LoadSession(dir, &s))
-        return;  // folder unavailable (USB stick?): ask again next time
+    if (!LoadSession(dir, &s)) {
+        if (!starting)
+            return false;  // folder unavailable (USB stick?): ask again at START SESSION
+        ConfirmSpec spec;
+        spec.caption = L"Unfinished session";
+        spec.label = L"UNFINISHED SESSION";
+        spec.title = L"Start a new session anyway?";
+        spec.body = L"A session in " + dir + L" wasn't finished, and Workbench can't read it now. If it's on a drive "
+                    L"that isn't connected, connect it and click START SESSION again. A new session leaves that one "
+                    L"open in its folder, and it won't be offered again.";
+        spec.okText = L"START NEW";
+        spec.okKind = BUTTON_PRIMARY;
+        spec.cancelText = L"CANCEL";
+        spec.focusOk = false;
+        if (!RunConfirmDialog(g.hwnd, spec))
+            return false;
+        WriteSetting(L"ActiveSession", L"");
+        return true;
+    }
     if (!IsSessionOpen(s.state)) {
         WriteSetting(L"ActiveSession", L"");
-        return;
+        return true;
     }
     if (RunRecoverDialog(g.hwnd, s) == RECOVER_CANCEL) {
         WString e = CancelSession(&s);
@@ -1985,13 +2006,13 @@ static void CheckUnfinishedSession()
         LayoutChildren();
         if (!e.empty())
             Message(L"Session closed", L"The session was closed, but its record couldn't be updated. " + e);
-        return;
+        return true;
     }
     HANDLE lock = LockWorkDir(s.workDir);
     if (!lock) {
         Message(L"Session open elsewhere", L"Another NCS Workbench window is running this session's WORK folder (" +
                                                s.workDir + L"). Continue it there.");
-        return;
+        return false;
     }
     if (lstrcmpiW(s.workDir.c_str(), g.workDir.c_str()) != 0)
         SetWorkDir(s.workDir);  // the session keeps the WORK folder it started in
@@ -1999,6 +2020,7 @@ static void CheckUnfinishedSession()
     g.lock = lock;
     EnterSession();
     Refresh(true);
+    return true;
 }
 
 static void CancelSessionFlow()
@@ -2772,7 +2794,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
 
     ShowWindow(hwnd, nCmdShow);
     UpdateWindow(hwnd);
-    CheckUnfinishedSession();
+    CheckUnfinishedSession(false);
 
     // No threads: wait on the change-notification handle and the message
     // queue together. Messages are pumped on every wake so a handle that

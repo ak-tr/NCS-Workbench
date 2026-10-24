@@ -331,6 +331,14 @@ static void TestFullSession()
     std::vector<Session> list = ListSessions(e.sessions);
     assert(list.size() == 1 && list[0].state == SESSION_COMPLETED);
 
+    // Newest first, and a limit reads only the newest.
+    Session second, third;
+    assert(CreateSession(&second, e.sessions, e.work, false).empty());
+    assert(CreateSession(&third, e.sessions, e.work, false).empty());
+    list = ListSessions(e.sessions, 2);
+    assert(list.size() == 2 && list[0].id == third.id && list[1].id == second.id);
+    assert(ListSessions(e.sessions).size() == 3);
+
     WString exported;
     assert(EnsureDir(JoinPath(e.root, L"Export")) == 0);
     assert(ExportSession(loaded, JoinPath(e.root, L"Export"), &exported).empty());

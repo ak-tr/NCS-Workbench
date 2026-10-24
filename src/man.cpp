@@ -4,6 +4,7 @@
 
 #include "man.h"
 #include "modal.h"
+#include "session.h"
 #include "theme.h"
 #include "util.h"
 
@@ -24,17 +25,6 @@ struct EmptyManDialog {
 };
 
 static EmptyManDialog* g_painting;  // PaintBuffered takes a plain function
-
-static bool ReadFileInfo(const WString& path, ULONGLONG* size, FILETIME* modified)
-{
-    WIN32_FILE_ATTRIBUTE_DATA a;
-    if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &a) ||
-        (a.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
-        return false;
-    *size = ((ULONGLONG)a.nFileSizeHigh << 32) | a.nFileSizeLow;
-    *modified = a.ftLastWriteTime;
-    return true;
-}
 
 static void DialogRects(int w, int h, RECT* change, RECT* cancel, RECT* ok)
 {
@@ -70,7 +60,7 @@ static void PaintDialog(HDC dc, const RECT& client)
     r = { pad, S(166), w - pad, S(188) };
     ULONGLONG size;
     FILETIME modified;
-    if (ReadFileInfo(d->man, &size, &modified)) {
+    if (ProbeFile(d->man, &size, &modified)) {
         WString info = L"FSW_PSW.MAN / " + FormatThousands(size) + L" B / " +
                        (IsRecent(modified) ? FormatAge(modified) : FormatStamp(modified));
         DrawLabel(dc, g_fonts.mono, kWhite, info.c_str(), r, DT_LEFT | DT_VCENTER);
@@ -107,7 +97,7 @@ static void DoEmpty(EmptyManDialog* d)
 {
     ULONGLONG size;
     FILETIME modified;
-    if (!ReadFileInfo(d->man, &size, &modified)) {
+    if (!ProbeFile(d->man, &size, &modified)) {
         SetError(d, L"FSW_PSW.MAN isn't in the WORK folder any more.");
         return;
     }
