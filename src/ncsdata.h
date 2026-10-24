@@ -339,22 +339,31 @@ inline int CountSharedFunctions(const std::vector<unsigned>& trace, const std::v
     return hits;
 }
 
-// Index of the module that clearly matches a trace with traceCount functions:
-// it codes at least 80% of them and more than twice as many as the runner-up.
+// Index of the module that clearly matches a trace with traceCount functions,
+// given each module's hits (CountSharedFunctions) and size (functions it codes).
+// A module's differences are the trace's functions it lacks plus the ones it
+// codes that the trace doesn't. The match codes at least 80% of the trace's
+// functions and has under half the differences of every other module. Counting
+// both sides tells coding indexes of one ECU apart: KMBI_PL2.C08 and .C09 both
+// have all 316 functions of a C08 trace, but C09 codes 66 the trace lacks, C08 13.
 // -1 if no module is a clear match.
-inline int PickModule(const std::vector<int>& hits, int traceCount)
+inline int PickModule(const std::vector<int>& hits, const std::vector<int>& sizes, int traceCount)
 {
-    int best = -1, runnerUp = 0;
+    if (traceCount <= 0 || hits.size() != sizes.size())
+        return -1;
+    int best = -1, bestDiff = 0, runnerUp = -1;  // runner-up: the fewest differences after best
     for (size_t i = 0; i < hits.size(); ++i) {
-        if (best < 0 || hits[i] > hits[best]) {
+        int diff = (traceCount - hits[i]) + (sizes[i] - hits[i]);
+        if (best < 0 || diff < bestDiff) {
             if (best >= 0)
-                runnerUp = hits[best];
+                runnerUp = bestDiff;
             best = (int)i;
-        } else if (hits[i] > runnerUp) {
-            runnerUp = hits[i];
+            bestDiff = diff;
+        } else if (runnerUp < 0 || diff < runnerUp) {
+            runnerUp = diff;
         }
     }
-    if (best < 0 || traceCount <= 0 || hits[best] * 5 < traceCount * 4 || hits[best] <= runnerUp * 2)
+    if (best < 0 || hits[best] * 5 < traceCount * 4 || (runnerUp >= 0 && bestDiff * 2 >= runnerUp))
         return -1;
     return best;
 }

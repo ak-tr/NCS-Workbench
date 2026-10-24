@@ -30,7 +30,7 @@ The file name is `CHASSIS-MODULE-YYYYMMDD-HHMM-FSW_PSW.TRC`, the pattern NCS Dum
 Other cases:
 
 - **No SP-Daten:** the chassis line says **SP-DATEN NOT FOUND** and both fields are typed, with built-in lists of common chassis and modules.
-- **No clear module:** if no module has at least 80% of the trace's functions and more than twice the runner-up, the line says **NO CLEAR MATCH, PICK ONE**.
+- **No clear module:** if no module has at least 80% of the trace's functions and fits the trace clearly better than every other module (counting the trace's functions it lacks and the ones it codes that the trace doesn't, so coding indexes of one ECU such as `KMBI_PL2.C08` and `.C09` are told apart), the line says **NO CLEAR MATCH, PICK ONE**.
 - **Same minute, same name:** a second backup gets `-2`, `-3`, ... before `-FSW_PSW.TRC`. Backups are never overwritten.
 
 ## 3. Backup saved

@@ -96,23 +96,32 @@ static void TestDetection()
     unsigned dsc[] = { 0x14D8, 0x144C, 0x1440, 0x0999 };
     unsigned kombi[] = { 0x0200, 0x14D8 };
     Bytes dscFile = ModuleFile(dsc, 4), kombiFile = ModuleFile(kombi, 2);
-    std::vector<int> hits;
+    std::vector<int> hits, sizes;
     hits.push_back(CountSharedFunctions(traceIds, ParseModuleFunctions(&kombiFile[0], kombiFile.size())));
     hits.push_back(CountSharedFunctions(traceIds, ParseModuleFunctions(&dscFile[0], dscFile.size())));
+    sizes.push_back(2);
+    sizes.push_back(4);
     assert(hits[0] == 1 && hits[1] == 3);
     // 3 of the 3 names the table knows is a clear match...
-    assert(PickModule(hits, (int)traceIds.size()) == 1);
+    assert(PickModule(hits, sizes, (int)traceIds.size()) == 1);
     // ...but the app counts all trace functions (4), and 3 of 4 is under 80%.
-    assert(PickModule(hits, (int)trace.size()) == -1);
+    assert(PickModule(hits, sizes, (int)trace.size()) == -1);
 
-    std::vector<int> unclear;
-    unclear.push_back(5);
-    unclear.push_back(3);
-    assert(PickModule(unclear, 5) == -1);  // runner-up too close
-    std::vector<int> weak;
-    weak.push_back(2);
-    assert(PickModule(weak, 10) == -1);  // under 80%
-    assert(PickModule(std::vector<int>(), 3) == -1);
+    // Coding indexes of one ECU, as a real KMBI_PL2 C08 trace (316 functions) matches them:
+    // C08 and C09 both have every function, C09 codes far more the trace lacks.
+    int kmbiHits[] = { 200, 236, 236, 316, 316 }, kmbiSizes[] = { 230, 261, 261, 329, 382 };
+    std::vector<int> kh(kmbiHits, kmbiHits + 5), ks(kmbiSizes, kmbiSizes + 5);
+    assert(PickModule(kh, ks, 316) == 3);
+    ks[4] = 340;  // a C09 hardly bigger than C08 (24 differences vs 13): too close
+    assert(PickModule(kh, ks, 316) == -1);
+    ks[4] = 329;  // same function list: no way to tell them apart
+    assert(PickModule(kh, ks, 316) == -1);
+
+    std::vector<int> unclear(2, 5), unclearSizes(2, 6);
+    assert(PickModule(unclear, unclearSizes, 5) == -1);  // tie
+    std::vector<int> weak(1, 2), weakSizes(1, 2);
+    assert(PickModule(weak, weakSizes, 10) == -1);  // under 80%
+    assert(PickModule(std::vector<int>(), std::vector<int>(), 3) == -1);
 }
 
 static void TestModuleCoding()
