@@ -169,16 +169,17 @@ static void UpdateForChassis(BackupDialog* d)
     WString path = JoinPath(d->datenDir, folder);
     std::vector<DatenModule> modules = LoadModules(path);
     std::vector<unsigned> traceIds = TraceFunctionIds(path, d->trace);
-    std::vector<int> hits;
+    std::vector<int> hits, sizes;
     for (size_t i = 0; i < modules.size(); ++i) {
         AddItem(d->module, modules[i].name);
         hits.push_back(CountSharedFunctions(traceIds, modules[i].functions));
+        sizes.push_back((int)modules[i].functions.size());
     }
     SetCursor(old);
 
     // Measured against all of the trace's functions, not just the ones this SP-Daten
     // knows: a mismatched SP-Daten version mustn't "detect" from a couple of names.
-    int pick = PickModule(hits, (int)d->trace.size());
+    int pick = PickModule(hits, sizes, (int)d->trace.size());
     if (!d->traceRead) {
         d->detection = DETECT_NO_TRACE;
     } else if (pick >= 0) {

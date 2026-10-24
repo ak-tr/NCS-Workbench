@@ -127,8 +127,8 @@ int CountSnapshots(const Session& s, SnapKind kind);
 
 bool SaveSession(Session* s);  // atomic: temp file, then replace; sets error on failure
 bool LoadSession(const WString& dir, Session* s);
-// Every session under root, newest first.
-std::vector<Session> ListSessions(const WString& sessionsRoot);
+// The sessions under root, newest first: all of them, or the newest `limit`.
+std::vector<Session> ListSessions(const WString& sessionsRoot, size_t limit = 0);
 
 // Each returns "" on success or an error to show; on error WORK is as it was,
 // or every changed file is already saved in the session folder.
