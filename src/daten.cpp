@@ -122,22 +122,26 @@ std::vector<std::pair<WString, WString> > LoadChassisList(const WString& datenDi
     return out;
 }
 
-std::vector<DatenModule> LoadModules(const WString& folderPath)
+std::vector<WString> ListModuleFiles(const WString& folderPath)
 {
-    std::vector<DatenModule> out;
+    std::vector<WString> out;
     std::vector<WString> files = ListFiles(folderPath, L"*.C*", false);
     std::sort(files.begin(), files.end(), LessNoCase);
     for (size_t i = 0; i < files.size(); ++i) {
-        if (!IsModuleFile(files[i].c_str()))
-            continue;
-        DatenModule m;
-        m.name = files[i];
-        String data;
-        if (ReadFileBytes(JoinPath(folderPath, files[i]), &data) && !data.empty())
-            m.functions = ParseModuleFunctions((const unsigned char*)data.data(), data.size());
-        out.push_back(m);
+        if (IsModuleFile(files[i].c_str()))
+            out.push_back(files[i]);
     }
     return out;
+}
+
+DatenModule LoadModule(const WString& folderPath, const WString& name)
+{
+    DatenModule m;
+    m.name = name;
+    String data;
+    if (ReadFileBytes(JoinPath(folderPath, name), &data) && !data.empty())
+        m.functions = ParseModuleFunctions((const unsigned char*)data.data(), data.size());
+    return m;
 }
 
 std::map<String, unsigned> LoadKeywords(const WString& folderPath, const wchar_t* pattern)
@@ -182,12 +186,7 @@ bool BeginIndexJob(const WString& folderPath, IndexJob* job)
     job->families.clear();
     if (!DirExists(folderPath))
         return false;
-    std::vector<WString> files = ListFiles(folderPath, L"*.C*", false);
-    std::sort(files.begin(), files.end(), LessNoCase);
-    for (size_t i = 0; i < files.size(); ++i) {
-        if (IsModuleFile(files[i].c_str()))
-            job->files.push_back(files[i]);
-    }
+    job->files = ListModuleFiles(folderPath);
     job->builder.index.moduleFiles = (int)job->files.size();
     // ECU families: <folder>SGET.000 (E89SGET.000); any *SGET.000 will do.
     std::vector<WString> sget = ListFiles(folderPath, L"*SGET.000", false);

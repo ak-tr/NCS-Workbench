@@ -8,6 +8,7 @@
 
 #include <windows.h>
 
+#include <map>
 #include <vector>
 
 #include "backup.h"
@@ -35,6 +36,8 @@ static const int kMaxCodeLength = 20;
 static const size_t kMaxRecentModules = 8;
 static const UINT WM_APP_REFRESH = WM_APP + 1;
 static const UINT WM_APP_CHASSIS = WM_APP + 2;
+static const UINT_PTR TIMER_LOAD = 1;
+static const DWORD kSliceMs = 30;  // module files read per timer tick
 
 enum { IDC_CHASSIS = 100, IDC_MODULE, IDC_CHANGE_FOLDER, IDC_DO_BACKUP, IDC_VEHICLE, IDC_READ_AGAIN };
 
@@ -68,7 +71,27 @@ struct BackupDialog {
     WString folder;  // DATEN folder of the chosen chassis, "" if none
     Detection detection;
     int detectedHits, traceKnown;
+
+    // Reading the folder's module files a slice per WM_TIMER, so the dialog
+    // shows at once; OK waits for it.
+    bool loading;
+    WString loadPath;
+    String loadSignature;
+    std::vector<WString> loadFiles;
+    std::vector<DatenModule> loaded;
+    WString moduleBefore;  // the module field when loading started
 };
+
+// The last DATEN folder's modules, kept while the app runs: its ~400 files
+// take seconds to read from a USB stick or in an XP VM. Reused while the
+// folder's signature is unchanged.
+struct ModuleCache {
+    WString path;
+    String signature;
+    std::vector<DatenModule> modules;
+    std::map<String, unsigned> keywords;  // SWTFSW*.DAT
+};
+static ModuleCache g_cache;
 
 // ---------------------------------------------------------------------------
 // Names
@@ -144,54 +167,112 @@ static void FillFallbackModules(BackupDialog* d)
         AddItem(d->module, m);
 }
 
-// Called when the chassis changes: reload the folder's modules and pick the
-// one the trace came from.
-static void UpdateForChassis(BackupDialog* d)
+// Fills the module list from the cache and picks the one the trace came from.
+// apply: put it in the field (false once the user has typed one meanwhile).
+static void Detect(BackupDialog* d, bool apply)
 {
-    WString chassis = SanitizeCode(GetWindowTextString(d->chassis), false);
-    WString folder = FolderForChassis(d->chassisList, chassis);
-    if (d->folderLoaded && lstrcmpiW(folder.c_str(), d->folder.c_str()) == 0)
-        return;
-    d->folder = folder;
-    d->folderLoaded = true;
-    d->detection = DETECT_NONE;
-
-    WString typed = GetWindowTextString(d->module);
-    SendMessageW(d->module, CB_RESETCONTENT, 0, 0);  // also clears the edit text
-    if (folder.empty()) {
-        FillFallbackModules(d);
-        SetWindowTextW(d->module, typed.c_str());
-        InvalidateRect(d->hwnd, NULL, FALSE);
-        return;
-    }
-
-    HCURSOR old = SetCursor(LoadCursorW(NULL, IDC_WAIT));
-    WString path = JoinPath(d->datenDir, folder);
-    std::vector<DatenModule> modules = LoadModules(path);
-    std::vector<unsigned> traceIds = TraceFunctionIds(path, d->trace);
+    std::vector<String> names;
+    for (size_t i = 0; i < d->trace.size(); ++i)
+        names.push_back(d->trace[i].name);
+    std::vector<unsigned> traceIds = MapFunctionNames(names, g_cache.keywords);
+    const std::vector<DatenModule>& modules = g_cache.modules;
     std::vector<int> hits, sizes;
     for (size_t i = 0; i < modules.size(); ++i) {
         AddItem(d->module, modules[i].name);
         hits.push_back(CountSharedFunctions(traceIds, modules[i].functions));
         sizes.push_back((int)modules[i].functions.size());
     }
-    SetCursor(old);
 
     // Measured against all of the trace's functions, not just the ones this SP-Daten
     // knows: a mismatched SP-Daten version mustn't "detect" from a couple of names.
+    WString text = GetWindowTextString(d->module);
     int pick = PickModule(hits, sizes, (int)d->trace.size());
     if (!d->traceRead) {
         d->detection = DETECT_NO_TRACE;
-    } else if (pick >= 0) {
+    } else if (pick < 0) {
+        d->detection = DETECT_UNCLEAR;
+    } else if (apply) {
         d->detection = DETECT_FOUND;
         d->detectedHits = hits[pick];
         d->traceKnown = (int)d->trace.size();
-        typed = modules[pick].name;
-    } else {
-        d->detection = DETECT_UNCLEAR;
+        text = modules[pick].name;
     }
-    SetWindowTextW(d->module, typed.c_str());
+    SetWindowTextW(d->module, text.c_str());
     InvalidateRect(d->hwnd, NULL, FALSE);
+}
+
+static void ShowLoading(BackupDialog* d, bool loading)
+{
+    d->loading = loading;
+    const wchar_t* ok = d->ecuMode ? L"CONFIRM" : L"BACK UP";
+    SetWindowTextW(d->ok, loading ? L"WAIT" : ok);
+    EnableWindow(d->ok, !loading);
+    InvalidateRect(d->hwnd, NULL, FALSE);
+}
+
+static void StopLoading(BackupDialog* d)
+{
+    if (!d->loading)
+        return;
+    KillTimer(d->hwnd, TIMER_LOAD);
+    d->loaded.clear();
+    ShowLoading(d, false);
+}
+
+static void OnLoadTimer(BackupDialog* d)
+{
+    if (!d->loading)
+        return;
+    DWORD start = GetTickCount();
+    while (d->loaded.size() < d->loadFiles.size() && GetTickCount() - start < kSliceMs)
+        d->loaded.push_back(LoadModule(d->loadPath, d->loadFiles[d->loaded.size()]));
+    if (d->loaded.size() < d->loadFiles.size()) {
+        InvalidateRect(d->hwnd, NULL, FALSE);  // progress
+        return;
+    }
+    g_cache.path = d->loadPath;
+    g_cache.signature = d->loadSignature;
+    g_cache.modules.swap(d->loaded);
+    g_cache.keywords = LoadKeywords(d->loadPath, L"SWTFSW*.DAT");
+    StopLoading(d);
+    Detect(d, GetWindowTextString(d->module) == d->moduleBefore);
+}
+
+// Called when the chassis changes: load the folder's modules (from the cache,
+// else a slice at a time) and pick the one the trace came from.
+static void UpdateForChassis(BackupDialog* d)
+{
+    WString chassis = SanitizeCode(GetWindowTextString(d->chassis), false);
+    WString folder = FolderForChassis(d->chassisList, chassis);
+    if (d->folderLoaded && lstrcmpiW(folder.c_str(), d->folder.c_str()) == 0)
+        return;
+    StopLoading(d);
+    d->folder = folder;
+    d->folderLoaded = true;
+    d->detection = DETECT_NONE;
+
+    WString typed = GetWindowTextString(d->module);
+    SendMessageW(d->module, CB_RESETCONTENT, 0, 0);  // also clears the edit text
+    SetWindowTextW(d->module, typed.c_str());
+    if (folder.empty()) {
+        FillFallbackModules(d);
+        InvalidateRect(d->hwnd, NULL, FALSE);
+        return;
+    }
+
+    WString path = JoinPath(d->datenDir, folder);
+    String signature = FolderSignature(path);
+    if (!signature.empty() && signature == g_cache.signature && lstrcmpiW(path.c_str(), g_cache.path.c_str()) == 0) {
+        Detect(d, true);
+        return;
+    }
+    d->loadPath = path;
+    d->loadSignature = signature;
+    d->loadFiles = ListModuleFiles(path);
+    d->loaded.clear();
+    d->moduleBefore = typed;
+    ShowLoading(d, true);
+    SetTimer(d->hwnd, TIMER_LOAD, 10, NULL);
 }
 
 // ---------------------------------------------------------------------------
@@ -245,7 +326,16 @@ static void PaintFieldInfo(HDC dc, BackupDialog* d, const Rects& rc)
     } else if (!typedChassis.empty()) {
         DrawLabel(dc, g_fonts.label, kWarn, L"NOT IN SP-DATEN", ci, DT_LEFT | DT_VCENTER, Tracking());
     }
-    if (d->detection == DETECT_FOUND) {
+    if (d->loading) {
+        wchar_t text[64];
+        wsprintfW(text, L"DETECTING  %d / %d", (int)d->loaded.size(), (int)d->loadFiles.size());
+        DrawLabel(dc, g_fonts.label, kAccent, text, mi, DT_LEFT | DT_VCENTER, Tracking());
+        RECT bar = { mi.left, mi.bottom + S(3), mi.right, mi.bottom + S(5) };
+        Fill(dc, bar, kRule);
+        if (!d->loadFiles.empty())
+            bar.right = bar.left + (int)((bar.right - bar.left) * d->loaded.size() / d->loadFiles.size());
+        Fill(dc, bar, kAccent);
+    } else if (d->detection == DETECT_FOUND) {
         // In a session it's only a suggestion: names can't prove which ECU wrote the trace.
         wchar_t text[64];
         wsprintfW(text, d->ecuMode ? L"SUGGESTED FROM TRACE (%d/%d)" : L"DETECTED FROM TRACE (%d/%d)",
@@ -401,6 +491,8 @@ static void DoConfirmEcu(BackupDialog* d)
 
 static void DoBackup(BackupDialog* d)
 {
+    if (d->loading)  // Enter while OK says WAIT
+        return;
     if (d->ecuMode) {
         DoConfirmEcu(d);
         return;
@@ -473,7 +565,6 @@ static void CreateDialogControls(BackupDialog* d)
 
     d->module = CreateCombo(d, IDC_MODULE, r.module);
     SetWindowTextW(d->module, SanitizeCode(ReadSetting(L"Module"), true).c_str());
-    UpdateForChassis(d);  // fills the module list, detects the module
 
     if (d->ecuMode) {
         d->vehicle = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
@@ -495,6 +586,7 @@ static void CreateDialogControls(BackupDialog* d)
     MoveWindow(d->cancel, r.cancel.left, r.cancel.top, r.cancel.right - r.cancel.left,
                r.cancel.bottom - r.cancel.top, FALSE);
     MoveWindow(d->ok, r.ok.left, r.ok.top, r.ok.right - r.ok.left, r.ok.bottom - r.ok.top, FALSE);
+    UpdateForChassis(d);  // fills the module list, detects the module (after OK exists: it waits for it)
 }
 
 static LRESULT CALLBACK DialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -535,6 +627,11 @@ static LRESULT CALLBACK DialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 
     case WM_APP_CHASSIS:
         UpdateForChassis(d);
+        return 0;
+
+    case WM_TIMER:
+        if (wParam == TIMER_LOAD)
+            OnLoadTimer(d);
         return 0;
 
     case WM_COMMAND:

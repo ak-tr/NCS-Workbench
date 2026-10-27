@@ -30,8 +30,11 @@ std::vector<std::pair<WString, WString> > LoadChassisList(const WString& datenDi
 // The DATEN folder of a chassis in that list (any case); "" if it isn't there.
 WString FolderForChassis(const std::vector<std::pair<WString, WString> >& list, const WString& chassis);
 
-// Module coding files (*.Cxx) in a DATEN folder, sorted by name.
-std::vector<DatenModule> LoadModules(const WString& folderPath);
+// Module coding files (*.Cxx) in a DATEN folder, sorted by name. Read one at
+// a time with LoadModule so a window can stay responsive (no functions if the
+// file can't be read).
+std::vector<WString> ListModuleFiles(const WString& folderPath);
+DatenModule LoadModule(const WString& folderPath, const WString& name);
 
 // Function ids of the trace's functions, using the folder's SWTFSW*.DAT.
 std::vector<unsigned> TraceFunctionIds(const WString& folderPath, const std::vector<TraceEntry>& trace);
