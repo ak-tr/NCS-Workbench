@@ -80,6 +80,8 @@ static const int kStageCount = 7;
 static const int kLinkCount = 3;
 static const int kCheckCount = 5;
 static const size_t kRecentCount = 3;
+// One ellipsis character: DrawText joins "..." into Geist Mono's ligature, a single dot.
+static const wchar_t kLoading[] = L"LOADING\x2026";
 
 struct FileEntry {
     WString name;
@@ -141,6 +143,10 @@ struct App {
     SessionReview review;              // REVIEWING
     SessionVerification verification;  // VERIFYING
     SessionChanges changes;            // VERIFYING, VO
+
+    // The control whose click is being worked on (BeginBusy), and its text.
+    HWND busyButton = NULL;
+    WString busyText;
 };
 
 static App g;
@@ -874,7 +880,7 @@ static void LayoutChildren()
     Place(g.startButton, l.startButton);
     Place(g.historyButton, RightLink(g.historyButton, l.right, (l.header.top + l.header.bottom) / 2));
     for (int i = 0; i < kToolCount; ++i) {
-        Show(g.toolButtons[i], !busy);
+        Show(g.toolButtons[i], !busy && g.busyButton != g.toolButtons[i]);  // a busy tile paints LOADING
         Place(g.toolButtons[i], LeftLink(g.toolButtons[i], l.tools[i].left + S(16), l.tools[i].bottom - S(24)));
     }
     Show(g.backupDirButton, !session);  // the preview changes the session folder with it
@@ -1086,13 +1092,18 @@ static void PaintIdle(HDC dc)
     DrawLabel(dc, g_fonts.label, kFaint, L"TOOLS / OUTSIDE A SESSION", l.toolsLabel, DT_LEFT | DT_VCENTER, Tracking());
     for (int i = 0; i < kToolCount; ++i) {
         const RECT& tile = l.tools[i];
-        Fill(dc, tile, *kToolColors[i]);
+        bool loading = g.busyButton == g.toolButtons[i];  // inverted, like a held button
+        Fill(dc, tile, loading ? kInvert : *kToolColors[i]);
         r = { tile.left + S(16), tile.top + S(14), tile.right - S(12), tile.top + S(34) };
-        DrawLabel(dc, g_fonts.body, kWhite, kToolTitles[i], r, DT_LEFT | DT_VCENTER);
+        DrawLabel(dc, g_fonts.body, loading ? kPage : kWhite, kToolTitles[i], r, DT_LEFT | DT_VCENTER);
         COLORREF color;
         r = { tile.left + S(16), tile.top + S(38), tile.right - S(12), tile.top + S(54) };
         WString meta = ToolMeta(dc, r.right - r.left, i, &color);
-        DrawLabel(dc, g_fonts.label, color, meta.c_str(), r, DT_LEFT | DT_VCENTER, Tracking());
+        DrawLabel(dc, g_fonts.label, loading ? kPage : color, meta.c_str(), r, DT_LEFT | DT_VCENTER, Tracking());
+        if (loading) {
+            r = { tile.left + S(16), tile.bottom - S(36), tile.right - S(12), tile.bottom - S(12) };
+            DrawLabel(dc, g_fonts.button, kPage, kLoading, r, DT_LEFT | DT_VCENTER, Tracking());
+        }
     }
 
     // Recent sessions
@@ -2390,6 +2401,30 @@ static void RecordBackup(const WString& path, bool fromEmptyMan)
     WriteSetting(L"LastBackup", path);
 }
 
+// A click whose window reads files before it shows: until it shows (the main
+// window gets disabled) or the work ends, the clicked tool's tile inverts and
+// says LOADING, a link says LOADING... Nothing repaints meanwhile, so paint now.
+static void BeginBusy(HWND button)
+{
+    g.busyButton = button;
+    g.busyText = GetWindowTextString(button);
+    SetWindowTextW(button, kLoading);  // a tool's button is hidden instead
+    LayoutChildren();
+    RedrawWindow(g.hwnd, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+    SetCursor(LoadCursorW(NULL, IDC_WAIT));
+}
+
+static void EndBusy()
+{
+    if (!g.busyButton)
+        return;
+    HWND button = g.busyButton;
+    g.busyButton = NULL;
+    SetWindowTextW(button, g.busyText.c_str());
+    LayoutChildren();
+    InvalidateRect(g.hwnd, NULL, FALSE);
+}
+
 static void StartBackup()
 {
     if (!FindFile(kTrcName) || Busy())
@@ -2609,6 +2644,11 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         OpenEcuDialog();
         return 0;
 
+    case WM_ENABLE:
+        if (!wParam)
+            EndBusy();  // a modal window is showing: the click's work is done
+        return 0;
+
     case WM_COMMAND: {
         int id = LOWORD(wParam);
         if (id >= IDC_LINK1 && id < IDC_LINK1 + kLinkCount) {
@@ -2641,7 +2681,9 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             StartSession();
             return 0;
         case IDC_HISTORY:
+            BeginBusy(g.historyButton);  // reads every session first
             ShowHistory();
+            EndBusy();
             return 0;
         case IDC_CANCEL_SESSION:
             CancelSessionFlow();
@@ -2653,14 +2695,19 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             OnSecondary();
             return 0;
         case IDC_BACKUP:
+            BeginBusy(g.toolButtons[0]);  // reads SP-Daten's chassis list first
             StartBackup();
+            EndBusy();
             return 0;
         case IDC_EMPTY:
             StartEmptyMan();
             return 0;
         case IDC_COMPARE:
-            if (g.canCompare && !Busy())
+            if (g.canCompare && !Busy()) {
+                BeginBusy(g.toolButtons[2]);  // reads and compares both files first
                 RunCompareDialog(hwnd, JoinPath(g.workDir, kTrcName), JoinPath(g.workDir, kManName));
+                EndBusy();
+            }
             return 0;
         case IDC_SHOW_BACKUP:
             ShowInExplorer(g.lastBackup);
@@ -2675,7 +2722,9 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             if (Busy())
                 return 0;
             unsigned before = TranslationsGeneration();
+            BeginBusy(g.explorerButton);  // lists SP-Daten's folders first
             RunExplorerDialog(hwnd, g.workDir);
+            EndBusy();
             if (TranslationsGeneration() != before) {  // changed from inside the explorer
                 g.dummyPath = ReadSetting(L"NcsDummyPath");
                 TranslationsChanged();

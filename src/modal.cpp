@@ -62,6 +62,12 @@ HWND CreateModal(HWND owner, const wchar_t* className, WNDPROC proc, const wchar
 
 void RunModal(HWND owner, HWND dialog, HWND initialFocus, const bool* done)
 {
+    // Clicks and keys made while the dialog was being prepared would open it
+    // again or land on the disabled owner (a beep): drop them.
+    MSG pending;
+    while (PeekMessageW(&pending, NULL, WM_MOUSEFIRST, WM_MOUSELAST, PM_REMOVE) ||
+           PeekMessageW(&pending, NULL, WM_KEYFIRST, WM_KEYLAST, PM_REMOVE)) {
+    }
     EnableWindow(owner, FALSE);
     ShowWindow(dialog, SW_SHOW);
     if (initialFocus)
